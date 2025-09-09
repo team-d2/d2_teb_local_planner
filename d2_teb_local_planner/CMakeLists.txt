@@ -1,6 +1,20 @@
 cmake_minimum_required(VERSION 3.5)
 project(d2_teb_local_planner)
 
+find_package(g2o QUIET)
+if(g2o_FOUND)
+  set(G2O_FOUND YES)
+  # 利用する最小セット (core, types_slam2d, stuff, solver_csparse)
+  set(G2O_INCLUDE_DIR ${g2o_INCLUDE_DIRS})
+  set(G2O_LIBRARIES g2o_core g2o_types_slam2d g2o_stuff g2o_solver_csparse)
+  message(STATUS "Found g2o via config package.")
+  return()
+endif()
+
+if(NOT G2O_SOLVER_CHOLMOD_LIB)
+  list(REMOVE_ITEM G2O_LIBRARIES ${G2O_SOLVER_CHOLMOD_LIB})
+endif()
+
 # Set to Release in order to speed up the program significantly
 set(CMAKE_BUILD_TYPE Release) #None, Debug, Release, RelWithDebInfo, MinSizeRel
 

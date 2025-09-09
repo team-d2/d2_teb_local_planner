@@ -38,8 +38,7 @@
 
 #include "d2_teb_local_planner/teb_local_planner_ros.h"
 
-//#include <tf_conversions/tf_eigen.h>
-#include <boost/algorithm/string.hpp>
+// #include <boost/algorithm/string.hpp>
 
 #include <string>
 
@@ -387,7 +386,8 @@ geometry_msgs::msg::TwistStamped TebLocalPlannerROS::computeVelocityCommands(con
     // Update footprint of the robot and minimum and maximum distance from the center of the robot to its footprint vertices.
     std::vector<geometry_msgs::msg::Point> updated_footprint_spec_ = costmap_ros_->getRobotFootprint();
     if (updated_footprint_spec_ != footprint_spec_) {
-      updated_footprint_spec_ = footprint_spec_;
+      // updated_footprint_spec_ = footprint_spec_;
+      footprint_spec_ = updated_footprint_spec_;
       std::tie(robot_inscribed_radius_, robot_circumscribed_radius) = nav2_costmap_2d::calculateMinAndMaxDistances(updated_footprint_spec_);
     }
   }

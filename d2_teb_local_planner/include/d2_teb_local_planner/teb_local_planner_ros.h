@@ -58,7 +58,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <visualization_msgs/msg/marker.hpp>
-#include <costmap_converter_msgs/msg/obstacle_msg.hpp>
+#include <d2_costmap_converter_msgs/msg/obstacle_msg.hpp>
 
 // transforms
 #include <tf2_ros/transform_listener.h>
@@ -72,8 +72,9 @@
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <nav_2d_utils/parameters.hpp>
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
+
 // dynamic reconfigure
-//#include "teb_local_planner/TebLocalPlannerReconfigureConfig.h>
+//#include "teb_local_planner/TebLocalPlannerReconfigureConfig.h"  ROS2でこれは使わない
 //#include <dynamic_reconfigure/server.h>
 
 
@@ -139,19 +140,6 @@ public:
     const geometry_msgs::msg::PoseStamped &pose,
     const geometry_msgs::msg::Twist &velocity,
       nav2_core::GoalChecker * goal_checker);
-  
-    
-  /** @name Public utility functions/methods */
-  //@{
-  
-    /**
-    * @brief  Transform a tf::Pose type into a Eigen::Vector2d containing the translational and angular velocities.
-    * 
-    * Translational velocities (x- and y-coordinates) are combined into a single translational velocity (first component).
-    * @param tf_vel tf::Pose message containing a 1D or 2D translational velocity (x,y) and an angular velocity (yaw-angle)
-    * @return Translational and angular velocity combined into an Eigen::Vector2d
-    */
-//  static Eigen::Vector2d tfPoseToEigenVector2dTransRot(const tf::Pose& tf_vel);
 
   /**
    * @brief Get the current robot footprint/contour model
@@ -159,33 +147,7 @@ public:
    * @return Robot footprint model used for optimization
    */
   RobotFootprintModelPtr getRobotFootprintFromParamServer(nav2_util::LifecycleNode::SharedPtr node);
-  
-  /** 
-   * @brief Set the footprint from the given XmlRpcValue.
-   * @remarks This method is copied from costmap_2d/footprint.h, since it is not declared public in all ros distros
-   * @remarks It is modified in order to return a container of Eigen::Vector2d instead of geometry_msgs::msg::Point
-   * @param footprint_xmlrpc should be an array of arrays, where the top-level array should have 3 or more elements, and the
-   * sub-arrays should all have exactly 2 elements (x and y coordinates).
-   * @param full_param_name this is the full name of the rosparam from which the footprint_xmlrpc value came. 
-   * It is used only for reporting errors. 
-   * @return container of vertices describing the polygon
-   */
-// Using ROS2 parameter server
-//  static Point2dContainer makeFootprintFromXMLRPC(XmlRpc::XmlRpcValue& footprint_xmlrpc, const std::string& full_param_name);
-  
-  /** 
-   * @brief Get a number from the given XmlRpcValue.
-   * @remarks This method is copied from costmap_2d/footprint.h, since it is not declared public in all ros distros
-   * @remarks It is modified in order to return a container of Eigen::Vector2d instead of geometry_msgs::msg::Point
-   * @param value double value type
-   * @param full_param_name this is the full name of the rosparam from which the footprint_xmlrpc value came. 
-   * It is used only for reporting errors. 
-   * @returns double value
-   */
-// Using ROS2 parameter server
-//  static double getNumberFromXMLRPC(XmlRpc::XmlRpcValue& value, const std::string& full_param_name);
-  
-  //@}
+
 
 protected:
 
@@ -366,7 +328,6 @@ private:
   rclcpp_lifecycle::LifecycleNode::WeakPtr nh_;
   rclcpp::Logger logger_{rclcpp::get_logger("TEBLocalPlanner")};
   rclcpp::Clock::SharedPtr clock_;
-  rclcpp::Node::SharedPtr intra_proc_node_;
   // external objects (store weak pointers)
   CostmapROSPtr costmap_ros_; //!< Pointer to the costmap ros wrapper, received from the navigation stack
   nav2_costmap_2d::Costmap2D* costmap_; //!< Pointer to the 2d costmap (obtained from the costmap ros wrapper)
