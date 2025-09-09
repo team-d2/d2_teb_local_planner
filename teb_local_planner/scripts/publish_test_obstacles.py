@@ -3,7 +3,7 @@
 # Author: christoph.roesmann@tu-dortmund.de
 
 import rospy, math
-from costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
+from d2_costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
 from geometry_msgs.msg import PolygonStamped, Point32
 
 

@@ -3,7 +3,7 @@
 # Author: franz.albers@tu-dortmund.de
 
 import rospy, math, tf
-from costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
+from d2_costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
 from geometry_msgs.msg import PolygonStamped, Point32, QuaternionStamped, Quaternion, TwistWithCovariance
 from tf.transformations import quaternion_from_euler
 

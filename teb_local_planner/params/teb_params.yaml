@@ -47,7 +47,7 @@ controller_server:
       dynamic_obstacle_inflation_dist: 0.6
       include_dynamic_obstacles: True 
 
-      costmap_converter_plugin: "costmap_converter::CostmapToPolygonsDBSMCCH"
+      costmap_converter_plugin: "d2_costmap_converter::CostmapToPolygonsDBSMCCH"
       costmap_converter_spin_thread: True
       costmap_converter_rate: 5
 
