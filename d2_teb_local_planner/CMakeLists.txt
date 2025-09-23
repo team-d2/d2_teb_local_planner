@@ -135,6 +135,24 @@ target_link_libraries(d2_teb_local_planner
 target_compile_definitions(d2_teb_local_planner PUBLIC "PLUGINLIB__DISABLE_BOOST_FUNCTIONS")
 
 
+#------------------------------------------------------------------------------------------
+add_library(teb_motion_component SHARED
+  src/teb_motion_component.cpp
+)
+ament_target_dependencies(teb_motion_component
+  rclcpp rclcpp_components geometry_msgs nav_msgs d2_costmap_converter_msgs
+)
+target_link_libraries(teb_motion_component d2_teb_local_planner)
+
+rclcpp_components_register_nodes(teb_motion_component "d2_teb_local_planner::TebMotionComponent")
+
+install(TARGETS teb_motion_component
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+#------------------------------------------------------------------------------------------
+
 #############
 ## Install ##
 #############
