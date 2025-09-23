@@ -882,5 +882,64 @@ void TebConfig::checkDeprecated(const nav2_util::LifecycleNode::SharedPtr nh, co
     RCLCPP_WARN(logger_, "TebLocalPlannerROS() Param Warning: 'global_plan_via_point_sep' is deprecated. It has been replaced by 'global_plan_viapoint_sep' due to consistency reasons.");
 }
 
-    
+RobotFootprintModelPtr TebConfig::getRobotFootprintFromParamServer(nav2_util::LifecycleNode::SharedPtr node)
+{
+    std::string model_name;
+    if (node->get_parameter(node_name + ".footprint_model.type", model_name))
+    {
+        if (model_name == "point")
+        {
+            return std::make_shared<PointRobotFootprint>();
+        }
+        else if (model_name == "circular")
+        {
+            double radius;
+            if (node->get_parameter(node_name + ".footprint_model.radius", radius))
+            {
+                return std::make_shared<CircularRobotFootprint>(radius);
+            }
+        }
+        else if (model_name == "line")
+        {
+            std::vector<double> line_start, line_end;
+            if (node->get_parameter(node_name + ".footprint_model.line_start", line_start) &&
+                node->get_parameter(node_name + ".footprint_model.line_end", line_end))
+            {
+                if (line_start.size() == 2 && line_end.size() == 2)
+                    return std::make_shared<LineRobotFootprint>(Eigen::Map<const Eigen::Vector2d>(line_start.data()), Eigen::Map<const Eigen::Vector2d>(line_end.data()));
+            }
+        }
+        else if (model_name == "two_circles")
+        {
+            double front_offset, front_radius, rear_offset, rear_radius;
+            if (node->get_parameter(node_name + ".footprint_model.front_offset", front_offset) &&
+                node->get_parameter(node_name + ".footprint_model.front_radius", front_radius) &&
+                node->get_parameter(node_name + ".footprint_model.rear_offset", rear_offset) &&
+                node->get_parameter(node_name + ".footprint_model.rear_radius", rear_radius))
+            {
+                return std::make_shared<TwoCirclesRobotFootprint>(front_offset, front_radius, rear_offset, rear_radius);
+            }
+        }
+        else if (model_name == "polygon")
+        {
+            std::string footprint_string;
+            if (node->get_parameter(node_name + ".footprint_model.vertices", footprint_string))
+            {
+                std::vector<geometry_msgs::msg::Point> footprint;
+                if (nav2_costmap_2d::makeFootprintFromString(footprint_string, footprint))
+                {
+                    Point2dContainer polygon;
+                    for(const auto &pt : footprint) {
+                        polygon.push_back(Eigen::Vector2d(pt.x, pt.y));
+                    }
+                    return std::make_shared<PolygonRobotFootprint>(polygon);
+                }
+            }
+        }
+    }
+
+    // fallback
+    RCLCPP_WARN(node->get_logger(), "No valid robot footprint model found from parameter server. Using point model.");
+    return std::make_shared<PointRobotFootprint>();
+}
 } // namespace d2_teb_local_planner

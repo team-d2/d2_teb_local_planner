@@ -1,14 +1,19 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 project(d2_teb_local_planner)
 
-find_package(g2o QUIET)
-if(g2o_FOUND)
-  set(G2O_FOUND YES)
-  # 利用する最小セット (core, types_slam2d, stuff, solver_csparse)
-  set(G2O_INCLUDE_DIR ${g2o_INCLUDE_DIRS})
-  set(G2O_LIBRARIES g2o_core g2o_types_slam2d g2o_stuff g2o_solver_csparse)
-  message(STATUS "Found g2o via config package.")
-  return()
+# find_package(g2o QUIET)
+# if(g2o_FOUND)
+#   set(G2O_FOUND YES)
+#   # 利用する最小セット (core, types_slam2d, stuff, solver_csparse)
+#   set(G2O_INCLUDE_DIR ${g2o_INCLUDE_DIRS})
+#   set(G2O_LIBRARIES g2o_core g2o_types_slam2d g2o_stuff g2o_solver_csparse)
+#   message(STATUS "Found g2o via config package.")
+#   return()
+# endif()
+
+if(POLICY CMP0072)
+  cmake_policy(SET CMP0072 NEW)
+  set(OpenGL_GL_PREFERENCE GLVND)
 endif()
 
 if(NOT G2O_SOLVER_CHOLMOD_LIB)
@@ -35,7 +40,7 @@ find_package(nav_2d_utils REQUIRED)
 find_package(nav2_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
-#find_package(interactive_markers REQUIRED)
+find_package(interactive_markers REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -57,7 +62,7 @@ SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/cmake_modules)
 message(STATUS "${CMAKE_MODULE_PATH}")
 find_package(SUITESPARSE REQUIRED)
 find_package(G2O REQUIRED)
-find_package(Boost REQUIRED)
+# find_package(Boost REQUIRED)
 
 # Eigen3 FindScript Backward compatibility (ubuntu saucy)
 # Since FindEigen.cmake is deprecated starting from jade.
@@ -133,6 +138,22 @@ target_compile_definitions(d2_teb_local_planner PUBLIC "PLUGINLIB__DISABLE_BOOST
 #############
 ## Install ##
 #############
+# Demo / test optimization node (ROS2 port of legacy test_optim_node)
+add_executable(test_optim_node
+  src/test_optim_node.cpp
+)
+ament_target_dependencies(test_optim_node
+  rclcpp nav2_util geometry_msgs nav_msgs interactive_markers
+)
+target_link_libraries(test_optim_node
+  d2_teb_local_planner
+)
+
+install(TARGETS d2_teb_local_planner test_optim_node
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
 
 ## Mark executables and/or libraries for installation
 install(TARGETS d2_teb_local_planner
@@ -146,12 +167,11 @@ install(DIRECTORY include/
 
 ## Mark other files for installation (e.g. launch and bag files, etc.)
 install(FILES
-  teb_local_planner_plugin.xml
+  d2_teb_local_planner_plugin.xml
   DESTINATION share
   )
 
 install(PROGRAMS scripts/cmd_vel_to_ackermann_drive.py DESTINATION lib/${PROJECT_NAME})
-
 install(DIRECTORY params DESTINATION share/${PROJECT_NAME})
 
 ament_export_include_directories(include)
@@ -165,12 +185,20 @@ pluginlib_export_plugin_description_file(nav2_core d2_teb_local_planner_plugin.x
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  #ament_add_gtest(homotopy_class_planner_test
-  #    test/homotopy_class_planner_test.cpp
-  #)
-  #target_link_libraries(homotopy_class_planner_test
-  #    d2_teb_local_planner
-  #)
+
+  ament_add_gtest(teb_basics_test
+      test/teb_basics.cpp
+  )
+  target_link_libraries(teb_basics_test
+      d2_teb_local_planner
+  )
+
+  ament_add_gtest(homotopy_class_planner_test
+      test/homotopy_class_planner_test.cpp
+  )
+  target_link_libraries(homotopy_class_planner_test
+      d2_teb_local_planner
+  )
 endif()
 
 ament_package()

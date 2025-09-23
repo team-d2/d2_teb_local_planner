@@ -1,0 +1,16 @@
+test_optim_node:
+  ros__parameters:
+    footprint_model.type: "circular"
+    footprint_model.radius: 0.25
+    min_obstacle_dist: 0.4
+    inflation_dist: 0.5
+    # 速度
+    max_vel_x: 0.5
+    max_vel_theta: 0.8
+    acc_lim_x: 0.6
+    acc_lim_theta: 0.8
+    # 最適化
+    weight_obstacle: 60.0
+    weight_viapoint: 1.0
+    # ホモトピー
+    enable_homotopy_class_planning: true

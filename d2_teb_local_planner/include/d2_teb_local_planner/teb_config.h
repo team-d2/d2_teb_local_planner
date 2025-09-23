@@ -417,6 +417,13 @@ public:
    * @param nh const reference to the local rclcpp::Node::SharedPtr
    */
   void checkDeprecated(const nav2_util::LifecycleNode::SharedPtr nh, const std::string name) const;
+
+  /**
+   * @brief Get the current robot footprint/contour model
+   * @param nh const reference to the local rclcpp::Node::SharedPtr
+   * @return Robot footprint model used for optimization
+   */
+  RobotFootprintModelPtr getRobotFootprintFromParamServer(nav2_util::LifecycleNode::SharedPtr node);
   
   /**
    * @brief Return the internal config mutex

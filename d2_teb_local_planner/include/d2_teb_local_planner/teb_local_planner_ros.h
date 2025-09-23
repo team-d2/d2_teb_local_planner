@@ -59,6 +59,7 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <d2_costmap_converter_msgs/msg/obstacle_msg.hpp>
+#include <d2_costmap_converter_msgs/msg/obstacle_array_msg.hpp>
 
 // transforms
 #include <tf2_ros/transform_listener.h>
@@ -146,7 +147,7 @@ public:
    * @param nh const reference to the local rclcpp::Node::SharedPtr
    * @return Robot footprint model used for optimization
    */
-  RobotFootprintModelPtr getRobotFootprintFromParamServer(nav2_util::LifecycleNode::SharedPtr node);
+  // RobotFootprintModelPtr getRobotFootprintFromParamServer(nav2_util::LifecycleNode::SharedPtr node);
 
 
 protected:
@@ -201,7 +202,7 @@ protected:
     * @brief Callback for custom obstacles that are not obtained from the costmap 
     * @param obst_msg pointer to the message containing a list of polygon shaped obstacles
     */
-  void customObstacleCB(const costmap_converter_msgs::msg::ObstacleArrayMsg::ConstSharedPtr obst_msg);
+  void customObstacleCB(const d2_costmap_converter_msgs::msg::ObstacleArrayMsg::ConstSharedPtr obst_msg);
   
    /**
     * @brief Callback for custom via-points
@@ -348,9 +349,9 @@ private:
   std::shared_ptr<d2_costmap_converter::BaseCostmapToPolygons> costmap_converter_; //!< Store the current costmap_converter  
 
   //std::shared_ptr< dynamic_reconfigure::Server<TebLocalPlannerReconfigureConfig> > dynamic_recfg_; //!< Dynamic reconfigure server to allow config modifications at runtime
-  rclcpp::Subscription<costmap_converter_msgs::msg::ObstacleArrayMsg>::SharedPtr custom_obst_sub_; //!< Subscriber for custom obstacles received via a ObstacleMsg.
+  rclcpp::Subscription<d2_costmap_converter_msgs::msg::ObstacleArrayMsg>::SharedPtr custom_obst_sub_; //!< Subscriber for custom obstacles received via a ObstacleMsg.
   std::mutex custom_obst_mutex_; //!< Mutex that locks the obstacle array (multi-threaded)
-  costmap_converter_msgs::msg::ObstacleArrayMsg custom_obstacle_msg_; //!< Copy of the most recent obstacle message
+  d2_costmap_converter_msgs::msg::ObstacleArrayMsg custom_obstacle_msg_; //!< Copy of the most recent obstacle message
 
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr via_points_sub_; //!< Subscriber for custom via-points received via a Path msg.
   bool custom_via_points_active_; //!< Keep track whether valid via-points have been received from via_points_sub_
@@ -373,6 +374,7 @@ private:
   bool initialized_; //!< Keeps track about the correct initialization of this class
   std::string name_; //!< Name of plugin ID
 
+  rclcpp::Node::SharedPtr costmap_converter_node_; //!< Node for the costmap converter plugin
 protected:
   // Dynamic parameters handler
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr dyn_params_handler;
