@@ -10,6 +10,6 @@ teb_msgs/TrajectoryMsg[] trajectories
 uint16 selected_trajectory_idx
 
 # List of active obstacles
-costmap_converter_msgs/ObstacleArrayMsg obstacles_msg
+d2_costmap_converter_msgs/ObstacleArrayMsg obstacles_msg
 
 
