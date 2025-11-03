@@ -1,5 +1,6 @@
 #include "d2_teb_local_planner/homotopy_class_planner.h"
 #include <rclcpp/rclcpp.hpp>
+#include "nav2_util/lifecycle_node.hpp"
 
 #include <gtest/gtest.h>
 
@@ -38,7 +39,8 @@ class HomotopyClassPlannerTest : public d2_teb_local_planner::HomotopyClassPlann
 
 TEST(test, test) {
     HomotopyClassPlannerTest test;
-    rclcpp::Node::SharedPtr node( new rclcpp::Node("test") );
+    // rclcpp::Node::SharedPtr node( new rclcpp::Node("test") );
+    nav2_util::LifecycleNode::SharedPtr node = std::make_shared<nav2_util::LifecycleNode>("homotopy_class_planner_test");
     test.SetUp(node);
 
     using namespace d2_teb_local_planner;

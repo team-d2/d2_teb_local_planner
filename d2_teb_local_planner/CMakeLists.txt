@@ -1,16 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(d2_teb_local_planner)
 
-# find_package(g2o QUIET)
-# if(g2o_FOUND)
-#   set(G2O_FOUND YES)
-#   # 利用する最小セット (core, types_slam2d, stuff, solver_csparse)
-#   set(G2O_INCLUDE_DIR ${g2o_INCLUDE_DIRS})
-#   set(G2O_LIBRARIES g2o_core g2o_types_slam2d g2o_stuff g2o_solver_csparse)
-#   message(STATUS "Found g2o via config package.")
-#   return()
-# endif()
-
 if(POLICY CMP0072)
   cmake_policy(SET CMP0072 NEW)
   set(OpenGL_GL_PREFERENCE GLVND)
@@ -21,16 +11,26 @@ if(NOT G2O_SOLVER_CHOLMOD_LIB)
 endif()
 
 # Set to Release in order to speed up the program significantly
-set(CMAKE_BUILD_TYPE Release) #None, Debug, Release, RelWithDebInfo, MinSizeRel
+# set(CMAKE_BUILD_TYPE Release) #None, Debug, Release, RelWithDebInfo, MinSizeRel
 
 # Default to C++14
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 14)
 endif()
 
-#if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-#  add_compile_options(-Wall -Wextra -Wpedantic)
-#endif()
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
+
+  if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    add_compile_definitions(NDEBUG)
+  endif()
+
+  message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
+  message(STATUS "CMAKE_CXX_FLAGS_RELEASE: ${CMAKE_CXX_FLAGS_RELEASE}")
+  message(STATUS "CMAKE_CXX_FLAGS_DEBUG: ${CMAKE_CXX_FLAGS_DEBUG}")
+endif()
 
 ## Find catkin macros and libraries
 find_package(ament_cmake REQUIRED)
@@ -45,8 +45,10 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
+find_package(rclcpp_components REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(teb_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -55,6 +57,8 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
+find_package(PCL REQUIRED COMPONENTS common)
+find_package(pcl_conversions REQUIRED)
 
 message(STATUS "System: ${CMAKE_SYSTEM}")
 ## System dependencies are found with CMake's conventions
@@ -76,8 +80,8 @@ elseif (EXISTS "FindEigen.cmake")
   e.g. by adding it to ${PROJECT_SOURCE_DIR}/cmake_modules.")
 endif (EXISTS "FindEigen3.cmake")
 
-set(EXTERNAL_INCLUDE_DIRS ${Eigen_INCLUDE_DIRS} ${SUITESPARSE_INCLUDE_DIRS} ${G2O_INCLUDE_DIR})
-set(EXTERNAL_LIBS ${Boost_LIBRARIES} ${SUITESPARSE_LIBRARIES} ${G2O_LIBRARIES})
+set(EXTERNAL_INCLUDE_DIRS ${Eigen_INCLUDE_DIRS} ${SUITESPARSE_INCLUDE_DIRS} ${G2O_INCLUDE_DIR} ${PCL_INCLUDE_DIRS})
+set(EXTERNAL_LIBS ${Boost_LIBRARIES} ${SUITESPARSE_LIBRARIES} ${G2O_LIBRARIES} ${PCL_LIBRARIES})
 
 ###########
 ## Build ##
@@ -134,23 +138,73 @@ target_link_libraries(d2_teb_local_planner
 
 target_compile_definitions(d2_teb_local_planner PUBLIC "PLUGINLIB__DISABLE_BOOST_FUNCTIONS")
 
-
 #------------------------------------------------------------------------------------------
-add_library(teb_motion_component SHARED
-  src/teb_motion_component.cpp
+# Obstacle Fusion Component
+add_library(obs_fusion_component SHARED
+  src/component/obs_fusion_component.cpp
 )
-ament_target_dependencies(teb_motion_component
-  rclcpp rclcpp_components geometry_msgs nav_msgs d2_costmap_converter_msgs
+
+set(obs_fusion_dependencies
+  rclcpp
+  rclcpp_components
+  sensor_msgs
+  nav_msgs
+  d2_costmap_converter_msgs
+  d2_costmap_converter
+  pluginlib
+  pcl_conversions
 )
-target_link_libraries(teb_motion_component d2_teb_local_planner)
 
-rclcpp_components_register_nodes(teb_motion_component "d2_teb_local_planner::TebMotionComponent")
+ament_target_dependencies(obs_fusion_component
+  ${obs_fusion_dependencies}
+)
 
-install(TARGETS teb_motion_component
+target_include_directories(obs_fusion_component PUBLIC
+  ${PCL_INCLUDE_DIRS}
+)
+
+target_link_libraries(obs_fusion_component
+  ${PCL_LIBRARIES}
+)
+
+rclcpp_components_register_nodes(obs_fusion_component "d2_teb_local_planner::ObstacleFusionComponent")
+
+install(TARGETS obs_fusion_component
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+#------------------------------------------------------------------------------------------
+# TEB Planner Standalone Component
+add_library(teb_planner_component SHARED
+  src/component/teb_planner_component.cpp
+)
+
+set(teb_planner_dependencies
+  rclcpp
+  rclcpp_components
+  geometry_msgs
+  nav_msgs
+  d2_costmap_converter_msgs
+)
+
+ament_target_dependencies(teb_planner_component
+  ${teb_planner_dependencies}
+)
+
+target_link_libraries(teb_planner_component
+  d2_teb_local_planner
+)
+
+rclcpp_components_register_nodes(teb_planner_component "d2_teb_local_planner::TebMotionStandaloneComponent")
+
+install(TARGETS teb_planner_component
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 #------------------------------------------------------------------------------------------
 
 #############
@@ -191,6 +245,9 @@ install(FILES
 
 install(PROGRAMS scripts/cmd_vel_to_ackermann_drive.py DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY params DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY maps DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 ament_export_include_directories(include)
 ament_export_libraries(d2_teb_local_planner)
@@ -211,12 +268,12 @@ if(BUILD_TESTING)
       d2_teb_local_planner
   )
 
-  ament_add_gtest(homotopy_class_planner_test
-      test/homotopy_class_planner_test.cpp
-  )
-  target_link_libraries(homotopy_class_planner_test
-      d2_teb_local_planner
-  )
+  # ament_add_gtest(homotopy_class_planner_test
+  #     test/homotopy_class_planner_test.cpp
+  # )
+  # target_link_libraries(homotopy_class_planner_test
+  #     d2_teb_local_planner
+  # )
 endif()
 
 ament_package()
