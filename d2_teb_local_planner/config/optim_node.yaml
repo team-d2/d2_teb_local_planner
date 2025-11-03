@@ -1,0 +1,39 @@
+test_optim_node:
+  ros__parameters:
+    # Trajectory parameters
+    teb_autosize: true
+    dt_ref: 0.3
+    dt_hysteresis: 0.1
+    min_samples: 3
+    max_samples: 500
+    
+    # Robot parameters
+    max_vel_x: 0.4
+    max_vel_x_backwards: 0.2
+    max_vel_theta: 0.3
+    acc_lim_x: 0.5
+    acc_lim_theta: 0.5
+    
+    # Footprint model
+    footprint_model:
+      type: "circular"
+      radius: 0.3
+    
+    # Optimization weights
+    weight_obstacle: 50.0
+    weight_viapoint: 1.0
+    weight_kinematics_nh: 1000.0
+    weight_max_vel_x: 2.0
+    weight_max_vel_theta: 1.0
+    
+    # Homotopy class planning
+    enable_homotopy_class_planning: true
+    simple_exploration: false
+    
+    # Obstacles
+    min_obstacle_dist: 0.5
+    inflation_dist: 0.6
+    
+    # Frame IDs
+    map_frame: "map"
+    odom_topic: "odom"

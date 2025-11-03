@@ -1,0 +1,6 @@
+costmap_manager:
+  ros__parameters:
+    costmap_converter_plugin: "d2_costmap_converter::CostmapToPolygonsDBSMCCH"
+    costmap_converter_rate: 5
+    point_obstacle_radius: 0.1
+    costmap_lethal_threshold: 200

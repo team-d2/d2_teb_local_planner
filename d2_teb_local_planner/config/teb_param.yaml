@@ -41,7 +41,7 @@ teb_motion_standalone:
     inflation_dist: 0.6
     dynamic_obstacle_inflation_dist: 0.6
     include_dynamic_obstacles: true
-    include_costmap_obstacles: false
+    include_costmap_obstacles: true
     costmap_obstacles_behind_robot_dist: 1.5
     obstacle_poses_affected: 25
     legacy_obstacle_association: false
