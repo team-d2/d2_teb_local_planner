@@ -87,6 +87,10 @@ public:
    * @param cfg const reference to the TebConfig class for parameters
    */
   TebVisualization(const rclcpp_lifecycle::LifecycleNode::SharedPtr & nh, const TebConfig& cfg);
+
+  // convenience overload for plain rclcpp::Node (non-lifecycle) callers / tests
+  TebVisualization(const rclcpp::Node::SharedPtr & nh, const TebConfig& cfg)
+    : TebVisualization(rclcpp_lifecycle::LifecycleNode::SharedPtr(), cfg) {}
   
   /** @name Publish to topics */
   //@{

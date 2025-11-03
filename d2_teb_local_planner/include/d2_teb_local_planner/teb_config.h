@@ -123,6 +123,7 @@ public:
   struct GoalTolerance
   {
     double xy_goal_tolerance; //!< Allowed final euclidean distance to the goal position
+    double yaw_goal_tolerance; //!< Allowed final angular difference to the goal orientation
     bool free_goal_vel; //!< Allow the robot's velocity to be nonzero (usally max_vel) for planning purposes
   } goal_tolerance; //!< Goal tolerance related parameters
 
