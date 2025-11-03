@@ -1,5 +1,4 @@
 #include <rclcpp/rclcpp.hpp>
-#include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <d2_costmap_converter_msgs/msg/obstacle_array_msg.hpp>
@@ -129,8 +128,10 @@ private:
       if (costmap_converter_) {
         auto polygons = costmap_converter_->getPolygons();
         if (polygons) {
-          for (const auto& poly : polygons->obstacles) {
-            obstacles_msg->obstacles.push_back(poly);
+          for (const auto& poly : *polygons) {
+            d2_costmap_converter_msgs::msg::ObstacleMsg obstacle;
+            obstacle.polygon = poly;
+            obstacles_msg->obstacles.push_back(obstacle);
           }
         }
       }
@@ -178,5 +179,3 @@ private:
 };
 
 } // namespace d2_teb_local_planner
-
-// RCLCPP_COMPONENTS_REGISTER_NODE(d2_teb_local_planner::ObstacleFusionComponent)

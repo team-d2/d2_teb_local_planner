@@ -24,7 +24,6 @@ public:
         cfg_ = std::make_shared<TebConfig>();
         cfg_->node_name = this->get_name();
         
-        // 通常のNodeでパラメータを読み込むための代替実装
         loadParameters();
         
         // Dynamic parameters
@@ -57,7 +56,7 @@ public:
             std::bind(&TebMotionStandaloneComponent::viaPointsCB, this, std::placeholders::_1));
 
         // Timer
-        double control_rate = cfg_->trajectory.control_rate > 0 ? cfg_->trajectory.control_rate : 10.0;
+        double control_rate = control_rate_ > 0 ? control_rate_ : 10.0;
         control_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(static_cast<int>(1000.0 / control_rate)),
             std::bind(&TebMotionStandaloneComponent::controlLoop, this));
@@ -65,7 +64,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "TEB Motion Standalone Component initialized");
     }
 
-    private:
+private:
     void loadParameters()
     {
         // Trajectory parameters
@@ -161,6 +160,9 @@ public:
         this->declare_parameter("footprint_model.radius", 0.3);
         this->declare_parameter("footprint_model.vertices", std::vector<double>{});
 
+        // others
+        this->declare_parameter("control_rate", 10.0);
+
         // Get parameters
         cfg_->trajectory.teb_autosize = this->get_parameter("teb_autosize").as_bool();
         cfg_->trajectory.dt_ref = this->get_parameter("dt_ref").as_double();
@@ -178,7 +180,9 @@ public:
         cfg_->trajectory.feasibility_check_no_poses = this->get_parameter("feasibility_check_no_poses").as_int();
         cfg_->trajectory.publish_feedback = this->get_parameter("publish_feedback").as_bool();
         cfg_->trajectory.control_look_ahead_poses = this->get_parameter("control_look_ahead_poses").as_int();
-        cfg_->trajectory.control_rate = this->get_parameter("control_rate").as_double();
+        // cfg_->trajectory.control_rate = this->get_parameter("control_rate").as_double();
+
+        control_rate_ = this->get_parameter("control_rate").as_double();
 
         cfg_->robot.max_vel_x = this->get_parameter("max_vel_x").as_double();
         cfg_->robot.max_vel_x_backwards = this->get_parameter("max_vel_x_backwards").as_double();
@@ -263,7 +267,7 @@ public:
     void initializeComponents()
     {
         // Visualization
-        visualization_ = std::make_shared<TebVisualization>(nullptr, *cfg_);
+        visualization_ = std::make_shared<TebVisualization>(rclcpp::Node::SharedPtr(), *cfg_);
         visualization_->on_configure();
         visualization_->on_activate();
         
@@ -473,6 +477,9 @@ public:
         path.poses = plan;
         global_plan_pub_->publish(path);
     }
+
+    // variables -------------------------------------------------------------
+    double control_rate_ = 10.0;
 
     std::shared_ptr<TebConfig> cfg_;
     std::shared_ptr<TebVisualization> visualization_;
