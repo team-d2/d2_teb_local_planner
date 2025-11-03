@@ -1,0 +1,54 @@
+<launch>
+  <let name="project_name" value="d2_teb_local_planner"/>
+  <let name="project_namespace" value="d2_teb_local_planner"/>
+  <let name="project_share" value="$(find-pkg-share $(var project_name))"/>
+
+  <arg name="use_sim_time" default="false" />
+  <arg name="namespace" default="" />
+  <arg name="container_name" default="teb_planner_container" />
+  <arg name="container_thread_num" default="2" />
+
+  <arg name="map_yaml" default="$(var project_share)/maps/map.yaml" />
+  <arg name="obstacle_fusion_params" default="$(var project_share)/config/obs_fusion_params.yaml" />
+  <arg name="teb_params" default="$(var project_share)/config/teb_params.yaml" />
+
+  <!-- Map Server -->
+  <node pkg="nav2_map_server" exec="map_server" name="map_server" output="screen">
+    <param name="yaml_filename" value="$(arg map_yaml)" />
+  </node>
+
+  <!-- Obstacle Fusion & TEB Local Planner -->
+  <group>
+    <node_container
+      pkg="rclcpp_components"
+      exec="component_container_mt"
+      namespace="$(var namespace)"
+      name="$(var container_name)"
+      output="screen">
+      <param name="thread_num" value="$(var container_thread_num)"/>
+    </node_container>
+
+    <load_composable_node
+      target="$(var namespace)/$(var container_name)">
+
+      <composable_node
+        pkg="$(var project_name)"
+        plugin="$(var project_namespace)::ObstacleFusionComponent"
+        name="obstacle_fusion">
+        <param name="use_sim_time" value="$(arg use_sim_time)" />
+        <param file="$(arg obstacle_fusion_params)" command="load" />
+        <extra_arg name="use_intra_process_comms" value="true"/>
+      </composable_node>
+
+      <composable_node
+        pkg="$(var project_name)"
+        plugin="$(var project_namespace)::TebLocalPlannerComponent"
+        name="teb_local_planner">
+        <param name="use_sim_time" value="$(arg use_sim_time)" />
+        <param file="$(arg teb_params)" command="load" />
+        <extra_arg name="use_intra_process_comms" value="true"/>
+      </composable_node>
+    </load_composable_node>
+  </group>
+
+</launch>
