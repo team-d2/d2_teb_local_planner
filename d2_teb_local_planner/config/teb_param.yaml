@@ -71,7 +71,7 @@ teb_motion_standalone:
     weight_adapt_factor: 2.0
     
     # Homotopy Class Planner
-    enable_homotopy_class_planning: false
+    enable_homotopy_class_planning: true
     enable_multithreading: true
     simple_exploration: false
     max_number_classes: 5

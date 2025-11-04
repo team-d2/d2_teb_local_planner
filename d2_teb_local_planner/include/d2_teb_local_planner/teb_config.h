@@ -76,7 +76,7 @@ public:
   //! Trajectory related parameters
   struct Trajectory
   {
-    double teb_autosize; //!< Enable automatic resizing of the trajectory w.r.t to the temporal resolution (recommended)
+    bool teb_autosize; //!< Enable automatic resizing of the trajectory w.r.t to the temporal resolution (recommended)
     double dt_ref; //!< Desired temporal resolution of the trajectory (should be in the magniture of the underlying control rate)
     double dt_hysteresis; //!< Hysteresis for automatic resizing depending on the current temporal resolution (dt): usually 10% of dt_ref
     int min_samples; //!< Minimum number of samples (should be always greater than 2)
@@ -250,7 +250,7 @@ public:
   {
 
     odom_topic = "odom";
-    map_frame = "odom";
+    map_frame = "map";
 
     // Trajectory
 

@@ -45,15 +45,15 @@ public:
 
     // Publishers
     obstacle_pub_ = this->create_publisher<d2_costmap_converter_msgs::msg::ObstacleArrayMsg>(
-        "/obstacles", 10);
+        "/obstacles", rclcpp::SensorDataQoS());
 
     // Subscribers
     costmap_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-        "/costmap", 10,
+        "/costmap", rclcpp::QoS(1).transient_local().reliable(),
         std::bind(&ObstacleFusionComponent::costmapCallback, this, std::placeholders::_1));
     
     pointcloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/points", 10,
+        "/points", rclcpp::SensorDataQoS(),
         std::bind(&ObstacleFusionComponent::pointcloudCallback, this, std::placeholders::_1));
 
     // Timer for publishing

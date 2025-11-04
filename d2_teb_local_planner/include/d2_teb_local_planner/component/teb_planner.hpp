@@ -9,6 +9,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <nav2_util/lifecycle_node.hpp>
 #include <d2_costmap_converter_msgs/msg/obstacle_array_msg.hpp>
 
 namespace d2_teb_local_planner
@@ -31,34 +32,29 @@ public:
             std::bind(&TebMotionStandaloneComponent::parametersCallback, this,
                     std::placeholders::_1));
 
+        RCLCPP_INFO(this->get_logger(), "Loaded parameters from parameter server");
         initializeComponents();
+        RCLCPP_INFO(this->get_logger(), "Initialized TEB components");
 
         // Publishers
         cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
-        local_plan_pub_ = this->create_publisher<nav_msgs::msg::Path>("/local_plan", 10);
-        global_plan_pub_ = this->create_publisher<nav_msgs::msg::Path>("/global_plan", 10);
 
         // Subscribers
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "/odom", rclcpp::SensorDataQoS(),
             std::bind(&TebMotionStandaloneComponent::odomCB, this, std::placeholders::_1));
         
-        goal_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "/goal_pose", rclcpp::SensorDataQoS(),
-            std::bind(&TebMotionStandaloneComponent::goalCB, this, std::placeholders::_1));
-        
         obstacle_sub_ = this->create_subscription<d2_costmap_converter_msgs::msg::ObstacleArrayMsg>(
             "/obstacles", rclcpp::SensorDataQoS(),
             std::bind(&TebMotionStandaloneComponent::obstacleCB, this, std::placeholders::_1));
         
-        via_sub_ = this->create_subscription<nav_msgs::msg::Path>(
-            "/via_points", rclcpp::SensorDataQoS(),
-            std::bind(&TebMotionStandaloneComponent::viaPointsCB, this, std::placeholders::_1));
+        // ようは waypointから作った global_plan を受け取る
+        global_plan_sub_ = this->create_subscription<nav_msgs::msg::Path>(
+            "/wp_global_plan", rclcpp::QoS(1).transient_local(),
+            std::bind(&TebMotionStandaloneComponent::globalPlanCB, this, std::placeholders::_1));
 
-        // Timer
-        double control_rate = control_rate_ > 0 ? control_rate_ : 10.0;
         control_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(static_cast<int>(1000.0 / control_rate)),
+            std::chrono::milliseconds(static_cast<int>(1000.0 / control_rate_)),
             std::bind(&TebMotionStandaloneComponent::controlLoop, this));
 
         RCLCPP_INFO(this->get_logger(), "TEB Motion Standalone Component initialized");
@@ -159,9 +155,6 @@ private:
         this->declare_parameter("footprint_model.type", std::string("point"));
         this->declare_parameter("footprint_model.radius", 0.3);
         this->declare_parameter("footprint_model.vertices", std::vector<double>{});
-
-        // others
-        this->declare_parameter("control_rate", 10.0);
 
         // Get parameters
         cfg_->trajectory.teb_autosize = this->get_parameter("teb_autosize").as_bool();
@@ -266,23 +259,32 @@ private:
 
     void initializeComponents()
     {
+        lifecycle_node_ = std::make_shared<nav2_util::LifecycleNode>(this->get_name() + std::string("_lc"));
+
+        cfg_->declareParameters(lifecycle_node_, lifecycle_node_->get_name());
+        cfg_->loadRosParamFromNodeHandle(lifecycle_node_, lifecycle_node_->get_name());
+        cfg_dyn_params_handler_ = this->add_on_set_parameters_callback(
+            std::bind(&TebConfig::dynamicParametersCallback, cfg_.get(), std::placeholders::_1)
+        );
+
         // Visualization
-        visualization_ = std::make_shared<TebVisualization>(rclcpp::Node::SharedPtr(), *cfg_);
+        visualization_ = std::make_shared<TebVisualization>(lifecycle_node_, *cfg_);
         visualization_->on_configure();
         visualization_->on_activate();
         
         // Planner
         if (cfg_->hcp.enable_homotopy_class_planning) {
             planner_ = std::make_shared<HomotopyClassPlanner>(
-                nullptr, *cfg_, &obstacles_, visualization_, &via_points_
+                lifecycle_node_, *cfg_, &obstacles_, visualization_, &via_points_
             );
         } else {
             planner_ = std::make_shared<TebOptimalPlanner>(
-                nullptr, *cfg_, &obstacles_, visualization_, &via_points_
+                lifecycle_node_, *cfg_, &obstacles_, visualization_, &via_points_
             );
         }
     }
 
+    // 動的パラメータ更新
     rcl_interfaces::msg::SetParametersResult parametersCallback(
         const std::vector<rclcpp::Parameter> & parameters)
     {
@@ -324,15 +326,6 @@ private:
         robot_vel_ = msg->twist.twist;
     }
 
-    void goalCB(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
-    {
-        std::lock_guard<std::mutex> lock(goal_mutex_);
-        goal_pose_ = PoseSE2(msg->pose);
-        has_goal_ = true;
-        RCLCPP_INFO(this->get_logger(), "New goal received: (%.2f, %.2f, %.2f)", 
-                    goal_pose_.x(), goal_pose_.y(), goal_pose_.theta());
-    }
-
     void obstacleCB(const d2_costmap_converter_msgs::msg::ObstacleArrayMsg::SharedPtr msg)
     {
         std::lock_guard<std::mutex> lock(obstacle_mutex_);
@@ -361,26 +354,27 @@ private:
                 obstacles_.push_back(ObstaclePtr(poly_obst));
             }
         }
-        
-        RCLCPP_DEBUG(this->get_logger(), "Received %zu obstacles", obstacles_.size());
     }
 
-    void viaPointsCB(const nav_msgs::msg::Path::SharedPtr msg)
+    void globalPlanCB(const nav_msgs::msg::Path::SharedPtr msg)
     {
         std::lock_guard<std::mutex> lock(via_mutex_);
+        global_plan_ = *msg;
+        has_global_plan_ = true;
         via_points_.clear();
-        for (const auto& pose : msg->poses) {
-            via_points_.emplace_back(pose.pose.position.x, pose.pose.position.y);
+        if (msg->poses.size() > 2) {
+            for (size_t i = 1; i < msg->poses.size() - 1; ++i) {
+                via_points_.emplace_back(msg->poses[i].pose.position.x, msg->poses[i].pose.position.y);
+            }
         }
     }
 
-    void controlLoop()
-    {
-        if (!has_goal_) return;
+    void controlLoop() {
+        if (!has_global_plan_) return;
 
         PoseSE2 robot_pose;
         geometry_msgs::msg::Twist robot_vel;
-        PoseSE2 goal_pose;
+        nav_msgs::msg::Path global_plan;
         
         {
             std::lock_guard<std::mutex> lock(odom_mutex_);
@@ -388,37 +382,42 @@ private:
             robot_vel = robot_vel_;
         }
         {
-            std::lock_guard<std::mutex> lock(goal_mutex_);
-            goal_pose = goal_pose_;
+            std::lock_guard<std::mutex> lock(via_mutex_);
+            global_plan = global_plan_;
         }
 
-        // Check if goal reached
-        double dist_to_goal = (goal_pose.position() - robot_pose.position()).norm();
-        if (dist_to_goal < cfg_->goal_tolerance.xy_goal_tolerance) {
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                "Goal reached!");
-            geometry_msgs::msg::Twist cmd;
-            cmd_pub_->publish(cmd);
-            return;
+        std::vector<geometry_msgs::msg::PoseStamped> initial_plan = global_plan.poses;
+        if (initial_plan.empty()) return;
+
+        // 現在のロボット位置を開始地点として設定
+        geometry_msgs::msg::PoseStamped start_pose;
+        start_pose.header = global_plan.header;
+        start_pose.pose.position.x = robot_pose.x();
+        start_pose.pose.position.y = robot_pose.y();
+        start_pose.pose.position.z = 0.0;
+        start_pose.pose.orientation = tf2::toMsg(tf2::Quaternion(tf2::Vector3(0, 0, 1), robot_pose.theta()));
+        
+        // グローバルプランから現在位置より前の部分を削除
+        size_t start_index = 0;
+        double min_dist = std::numeric_limits<double>::max();
+        for (size_t i = 0; i < initial_plan.size(); ++i) {
+            PoseSE2 pose(initial_plan[i].pose);
+            double dist = (pose.position() - robot_pose.position()).norm();
+            if (dist < min_dist) {
+                min_dist = dist;
+                start_index = i;
+            }
         }
+        
+        // 現在位置を開始地点として挿入
+        std::vector<geometry_msgs::msg::PoseStamped> pruned_plan;
+        pruned_plan.push_back(start_pose);
+        pruned_plan.insert(pruned_plan.end(), 
+                        initial_plan.begin() + start_index, 
+                        initial_plan.end());
 
-        // Create initial plan
-        std::vector<geometry_msgs::msg::PoseStamped> initial_plan;
-        geometry_msgs::msg::PoseStamped start_pose, goal_pose_stamped;
-        start_pose.header.stamp = this->now();
-        start_pose.header.frame_id = "odom";
-        robot_pose.toPoseMsg(start_pose.pose);
-        
-        goal_pose_stamped.header = start_pose.header;
-        goal_pose.toPoseMsg(goal_pose_stamped.pose);
-        
-        initial_plan.push_back(start_pose);
-        initial_plan.push_back(goal_pose_stamped);
+        bool success = planner_->plan(pruned_plan, &robot_vel, cfg_->goal_tolerance.free_goal_vel);
 
-        // Plan
-        bool success = planner_->plan(initial_plan, &robot_vel, 
-                                    cfg_->goal_tolerance.free_goal_vel);
-        
         if (!success) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                 "Planning failed!");
@@ -429,9 +428,9 @@ private:
         double vx = 0, vy = 0, omega = 0;
         if (!planner_->getVelocityCommand(vx, vy, omega, 
                                         cfg_->trajectory.control_look_ahead_poses)) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                            "Failed to get velocity command!");
-        return;
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                "Failed to get velocity command!");
+            return;
         }
 
         // Publish command
@@ -441,41 +440,15 @@ private:
         cmd.angular.z = omega;
         cmd_pub_->publish(cmd);
 
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                            "Published cmd_vel: vx=%.2f, vy=%.2f, omega=%.2f", vx, vy, omega);
+
         // Publish visualizations
-        publishLocalPlan();
-        publishGlobalPlan(initial_plan);
-        visualization_->publishViaPoints(via_points_);
-        visualization_->publishObstacles(obstacles_);
-        planner_->visualize();
-    }
-
-    void publishLocalPlan()
-    {
-        auto teb_planner = std::dynamic_pointer_cast<TebOptimalPlanner>(planner_);
-        if (!teb_planner) return;
-
-        const TimedElasticBand& teb = teb_planner->teb();
-        nav_msgs::msg::Path path;
-        path.header.stamp = this->now();
-        path.header.frame_id = "odom";
-
-        for (int i = 0; i < teb.sizePoses(); ++i) {
-            geometry_msgs::msg::PoseStamped pose_stamped;
-            pose_stamped.header = path.header;
-            teb.Pose(i).toPoseMsg(pose_stamped.pose);
-            path.poses.push_back(pose_stamped);
+        if (visualization_) {
+            visualization_->publishObstacles(obstacles_);
+            visualization_->publishViaPoints(via_points_);
         }
-
-        local_plan_pub_->publish(path);
-    }
-
-    void publishGlobalPlan(const std::vector<geometry_msgs::msg::PoseStamped>& plan)
-    {
-        nav_msgs::msg::Path path;
-        path.header.stamp = this->now();
-        path.header.frame_id = "odom";
-        path.poses = plan;
-        global_plan_pub_->publish(path);
+        planner_->visualize();
     }
 
     // variables -------------------------------------------------------------
@@ -484,23 +457,23 @@ private:
     std::shared_ptr<TebConfig> cfg_;
     std::shared_ptr<TebVisualization> visualization_;
     PlannerInterfacePtr planner_;
+    nav2_util::LifecycleNode::SharedPtr lifecycle_node_;
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr cfg_dyn_params_handler_;
     
     ObstContainer obstacles_;
     std::vector<Eigen::Vector2d, Eigen::aligned_allocator<Eigen::Vector2d>> via_points_;
+    nav_msgs::msg::Path global_plan_;
     
     PoseSE2 robot_pose_;
     PoseSE2 goal_pose_;
     geometry_msgs::msg::Twist robot_vel_;
-    bool has_goal_ = false;
+    bool has_global_plan_ = false;
     
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr local_plan_pub_;
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr global_plan_pub_;
     
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
     rclcpp::Subscription<d2_costmap_converter_msgs::msg::ObstacleArrayMsg>::SharedPtr obstacle_sub_;
-    rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr via_sub_;
+    rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr global_plan_sub_;
     
     rclcpp::TimerBase::SharedPtr control_timer_;
     
