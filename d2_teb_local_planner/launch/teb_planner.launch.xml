@@ -3,18 +3,32 @@
   <let name="project_namespace" value="d2_teb_local_planner"/>
   <let name="project_share" value="$(find-pkg-share $(var project_name))"/>
 
-  <arg name="use_sim_time" default="false" />
+  <arg name="use_sim_time" default="true" />
   <arg name="namespace" default="" />
   <arg name="container_name" default="teb_planner_container" />
   <arg name="container_thread_num" default="2" />
 
-  <arg name="map_yaml" default="$(var project_share)/maps/map.yaml" />
-  <arg name="obstacle_fusion_params" default="$(var project_share)/config/obs_fusion_params.yaml" />
-  <arg name="teb_params" default="$(var project_share)/config/teb_params.yaml" />
+  <arg name="map_yaml" default="$(var project_share)/maps/sample.yaml" />
+  <arg name="obstacle_fusion_params" default="$(var project_share)/config/obs_fusion_param.yaml" />
+  <arg name="teb_params" default="$(var project_share)/config/teb_param.yaml" />
+
+  <arg name="points_topic" default="/velodyne_points" />
+
+  <arg name="global_plan_topic" default="/waypoint_path" />
+  <arg name="odom_topic" default="/odom" />
+  <arg name="obstacles_topic" default="/obstacles" />
 
   <!-- Map Server -->
   <node pkg="nav2_map_server" exec="map_server" name="map_server" output="screen">
-    <param name="yaml_filename" value="$(arg map_yaml)" />
+    <param name="yaml_filename" value="$(var map_yaml)" />
+    <param name="topic_name" value="costmap" />
+    <param name="frame_id" value="map" />
+    <param name="use_sim_time" value="$(var use_sim_time)" />
+  </node>
+  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager" name="lifecycle_manager_map" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)" />
+    <param name="autostart" value="true" />
+    <param name="node_names" value="['map_server']" />
   </node>
 
   <!-- Obstacle Fusion & TEB Local Planner -->
@@ -35,18 +49,22 @@
         pkg="$(var project_name)"
         plugin="$(var project_namespace)::ObstacleFusionComponent"
         name="obstacle_fusion">
-        <param name="use_sim_time" value="$(arg use_sim_time)" />
-        <param file="$(arg obstacle_fusion_params)" command="load" />
-        <extra_arg name="use_intra_process_comms" value="true"/>
+        <param name="use_sim_time" value="$(var use_sim_time)" />
+        <param from="$(var obstacle_fusion_params)" allow_substs="true" />
+        <remap from="/points" to="$(var points_topic)" />
+        <extra_arg name="use_intra_process_comms" value="false"/>
       </composable_node>
 
       <composable_node
         pkg="$(var project_name)"
-        plugin="$(var project_namespace)::TebLocalPlannerComponent"
+        plugin="$(var project_namespace)::TebMotionStandaloneComponent"
         name="teb_local_planner">
-        <param name="use_sim_time" value="$(arg use_sim_time)" />
-        <param file="$(arg teb_params)" command="load" />
-        <extra_arg name="use_intra_process_comms" value="true"/>
+        <param name="use_sim_time" value="$(var use_sim_time)" />
+        <param from="$(var teb_params)" allow_substs="true" />
+        <remap from="/wp_global_plan" to="$(var global_plan_topic)" />
+        <remap from="/odom" to="$(var odom_topic)" />
+        <remap from="/obstacles" to="$(var obstacles_topic)" />
+        <extra_arg name="use_intra_process_comms" value="false"/>
       </composable_node>
     </load_composable_node>
   </group>
