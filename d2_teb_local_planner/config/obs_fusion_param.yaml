@@ -1,6 +1,13 @@
 costmap_manager:
   ros__parameters:
     costmap_converter_plugin: "d2_costmap_converter::CostmapToPolygonsDBSMCCH"
-    costmap_converter_rate: 5
-    point_obstacle_radius: 0.1
-    costmap_lethal_threshold: 200
+    converter_rate: 5.0
+    costmap_lethal_threshold: 99
+    submap_size_x: 20.0
+    submap_size_y: 5.0
+    target_frame: "map"
+    pointcloud_min_distance: 0.5
+    pointcloud_max_distance: 10.0
+    pointcloud_min_height: -0.75
+    pointcloud_max_height: 2.0
+    voxel_leaf_size: 0.25

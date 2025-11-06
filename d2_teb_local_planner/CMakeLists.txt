@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.14)
 project(d2_teb_local_planner)
 
 if(POLICY CMP0072)
@@ -20,7 +20,7 @@ endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
 
   if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
@@ -34,6 +34,7 @@ endif()
 
 ## Find catkin macros and libraries
 find_package(ament_cmake REQUIRED)
+find_package(PCL 1.12 REQUIRED COMPONENTS common filters segmentation io)
 find_package(d2_costmap_converter REQUIRED)
 find_package(dwb_critics REQUIRED)
 find_package(nav_2d_utils REQUIRED)
@@ -57,7 +58,6 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common)
 find_package(pcl_conversions REQUIRED)
 
 message(STATUS "System: ${CMAKE_SYSTEM}")
@@ -91,6 +91,7 @@ include_directories(
   include
   ${Boost_INCLUDE_DIRS}
   ${EXTERNAL_INCLUDE_DIRS}
+  ${PCL_INCLUDE_DIRS}
 )
 
 ## Build the teb_local_planner library
@@ -153,6 +154,7 @@ set(obs_fusion_dependencies
   d2_costmap_converter
   pluginlib
   pcl_conversions
+  nav2_costmap_2d
 )
 
 ament_target_dependencies(obs_fusion_component
@@ -160,12 +162,17 @@ ament_target_dependencies(obs_fusion_component
 )
 
 target_include_directories(obs_fusion_component PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
   ${PCL_INCLUDE_DIRS}
 )
 
 target_link_libraries(obs_fusion_component
+  d2_teb_local_planner
   ${PCL_LIBRARIES}
 )
+
+target_compile_definitions(obs_fusion_component PUBLIC ${PCL_DEFINITIONS})
 
 rclcpp_components_register_nodes(obs_fusion_component "d2_teb_local_planner::ObstacleFusionComponent")
 

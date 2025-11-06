@@ -12,6 +12,8 @@
 #include <nav2_util/lifecycle_node.hpp>
 #include <d2_costmap_converter_msgs/msg/obstacle_array_msg.hpp>
 
+#include <chrono>
+
 namespace d2_teb_local_planner
 {
 
@@ -37,7 +39,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "Initialized TEB components");
 
         // Publishers
-        cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+        cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel_teb", 10);
 
         // Subscribers
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
@@ -50,7 +52,7 @@ public:
         
         // ようは waypointから作った global_plan を受け取る
         global_plan_sub_ = this->create_subscription<nav_msgs::msg::Path>(
-            "/wp_global_plan", rclcpp::QoS(1).transient_local(),
+            "/wp_global_plan", 10,
             std::bind(&TebMotionStandaloneComponent::globalPlanCB, this, std::placeholders::_1));
 
         control_timer_ = this->create_wall_timer(
@@ -416,7 +418,11 @@ private:
                         initial_plan.begin() + start_index, 
                         initial_plan.end());
 
+        const std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
         bool success = planner_->plan(pruned_plan, &robot_vel, cfg_->goal_tolerance.free_goal_vel);
+        const std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
+        const double planning_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+        RCLCPP_DEBUG(this->get_logger(), "Planning time: %.2f ms", planning_time);
 
         if (!success) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
@@ -439,9 +445,6 @@ private:
         cmd.linear.y = vy;
         cmd.angular.z = omega;
         cmd_pub_->publish(cmd);
-
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                            "Published cmd_vel: vx=%.2f, vy=%.2f, omega=%.2f", vx, vy, omega);
 
         // Publish visualizations
         if (visualization_) {
