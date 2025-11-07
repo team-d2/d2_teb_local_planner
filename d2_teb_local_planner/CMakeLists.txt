@@ -218,21 +218,21 @@ install(TARGETS teb_planner_component
 ## Install ##
 #############
 # Demo / test optimization node (ROS2 port of legacy test_optim_node)
-add_executable(test_optim_node
-  src/test_optim_node.cpp
-)
-ament_target_dependencies(test_optim_node
-  rclcpp nav2_util geometry_msgs nav_msgs interactive_markers
-)
-target_link_libraries(test_optim_node
-  d2_teb_local_planner
-)
+# add_executable(test_optim_node
+#   src/test_optim_node.cpp
+# )
+# ament_target_dependencies(test_optim_node
+#   rclcpp nav2_util geometry_msgs nav_msgs interactive_markers
+# )
+# target_link_libraries(test_optim_node
+#   d2_teb_local_planner
+# )
 
-install(TARGETS d2_teb_local_planner test_optim_node
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION lib/${PROJECT_NAME}
-)
+# install(TARGETS d2_teb_local_planner test_optim_node
+#   ARCHIVE DESTINATION lib
+#   LIBRARY DESTINATION lib
+#   RUNTIME DESTINATION lib/${PROJECT_NAME}
+# )
 
 ## Mark executables and/or libraries for installation
 install(TARGETS d2_teb_local_planner
