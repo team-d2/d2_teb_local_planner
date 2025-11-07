@@ -333,7 +333,7 @@ private:
         std::lock_guard<std::mutex> lock(obstacle_mutex_);
         obstacles_.clear();
 
-        RCLCPP_INFO(this->get_logger(), "Received %zu obstacles", msg->obstacles.size());
+        RCLCPP_DEBUG(this->get_logger(), "Received %zu obstacles", msg->obstacles.size());
         
         for (const auto& obstacle_msg : msg->obstacles) {
             if (obstacle_msg.polygon.points.size() == 1) {

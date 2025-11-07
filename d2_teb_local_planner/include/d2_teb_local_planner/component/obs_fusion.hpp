@@ -47,6 +47,9 @@ public:
     this->declare_parameter("cluster_max_points", 200);
     this->declare_parameter("cluster_max_clusters", 120);
     this->declare_parameter("cluster_max_radius", 0.8);
+    this->declare_parameter("submap_front", 10.0);
+    this->declare_parameter("submap_rear", 3.0);
+    this->declare_parameter("submap_side", 3.0);
     
     std::string plugin_name = this->get_parameter("costmap_converter_plugin").as_string();
     converter_rate_ = this->get_parameter("converter_rate").as_double();
@@ -58,6 +61,9 @@ public:
     pc_max_dist_ = this->get_parameter("pointcloud_max_distance").as_double();
     pc_min_height_ = this->get_parameter("pointcloud_min_height").as_double();
     pc_max_height_ = this->get_parameter("pointcloud_max_height").as_double();
+    submap_front_ = this->get_parameter("submap_front").as_double();
+    submap_rear_ = this->get_parameter("submap_rear").as_double();
+    submap_side_ = this->get_parameter("submap_side").as_double();
 
     double voxel_size = this->get_parameter("voxel_leaf_size").as_double();
     voxel_filter_.setLeafSize(voxel_size, voxel_size, voxel_size);
@@ -79,9 +85,9 @@ public:
     }
 
     obstacle_pub_ = this->create_publisher<d2_costmap_converter_msgs::msg::ObstacleArrayMsg>(
-        "/obstacles", 10);
+        "/obstacles", rclcpp::SensorDataQoS());
     obstacle_marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(
-        "/obstacle_markers", 10);
+        "/obstacle_markers", rclcpp::SensorDataQoS());
 
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
       "/odom", rclcpp::SensorDataQoS(),
@@ -178,9 +184,6 @@ private:
   {
     const std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
     auto merged_costmap = buildMergedCostmap();
-    const std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
-    const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-    RCLCPP_INFO(this->get_logger(), "Merged costmap built in %ld ms", duration_ms);
     if (!merged_costmap) {
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                            "Failed to build merged costmap");
@@ -192,7 +195,7 @@ private:
     
     auto polygons = costmap_converter_->getPolygons();
     if (!polygons || polygons->empty()) {
-      RCLCPP_DEBUG(this->get_logger(), "No obstacles detected");
+      RCLCPP_WARN(this->get_logger(), "No obstacles detected");
       return;
     }
     
@@ -211,6 +214,7 @@ private:
     
     appendPointClusters(*obstacles_msg);
     if (obstacles_msg->obstacles.empty()) {
+      RCLCPP_WARN(this->get_logger(), "No obstacles to publish after clustering");
       return;
     }
     
@@ -226,82 +230,107 @@ private:
 
   std::shared_ptr<nav2_costmap_2d::Costmap2D> buildMergedCostmap()
   {
-    // ロボット位置取得（mapとして扱う）
     double robot_x = 0.0;
     double robot_y = 0.0;
+    geometry_msgs::msg::Quaternion robot_q;
     {
       std::lock_guard<std::mutex> lock(odom_mutex_);
       robot_x = robot_pose_.position.x;
       robot_y = robot_pose_.position.y;
+      robot_q = robot_pose_.orientation;
     }
 
     nav_msgs::msg::OccupancyGrid::SharedPtr costmap_copy;
     {
       std::lock_guard<std::mutex> lock(costmap_mutex_);
-      if (!cached_costmap_) return nullptr;
+      if (!cached_costmap_) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "No costmap received yet.");
+        return nullptr;
+      }
       costmap_copy = cached_costmap_;
     }
-    
+
     double resolution = costmap_copy->info.resolution;
-    
-    double half_x = submap_size_x_ / 2.0;
-    double half_y = submap_size_y_ / 2.0;
-    double submap_origin_x = robot_x - half_x;
-    double submap_origin_y = robot_y - half_y;
-    
-    int submap_width = static_cast<int>(std::ceil(submap_size_x_ / resolution));
-    int submap_height = static_cast<int>(std::ceil(submap_size_y_ / resolution));
-    
+    if (resolution <= 0.0) {
+      RCLCPP_ERROR(this->get_logger(), "Invalid costmap resolution: %f", resolution);
+      return nullptr;
+    }
+
+    // ロボットの向き（ヨー角）を計算
+    double qx = robot_q.x;
+    double qy = robot_q.y;
+    double qz = robot_q.z;
+    double qw = robot_q.w;
+    double yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
+    double cos_yaw = std::cos(yaw);
+    double sin_yaw = std::sin(yaw);
+
+    // ロボット座標系でのサブマップの4隅の点を定義
+    // (前方: +x, 後方: -x, 左: +y, 右: -y)
+    std::vector<std::pair<double, double>> local_corners = {
+      {submap_front_,  submap_side_},  // 前方左
+      {submap_front_, -submap_side_},  // 前方右
+      {-submap_rear_, -submap_side_},  // 後方右
+      {-submap_rear_,  submap_side_}   // 後方左
+    };
+
+    // 4隅の点をmap座標系に変換
+    double min_wx = std::numeric_limits<double>::max();
+    double max_wx = std::numeric_limits<double>::lowest();
+    double min_wy = std::numeric_limits<double>::max();
+    double max_wy = std::numeric_limits<double>::lowest();
+
+    for (const auto& local_pt : local_corners) {
+      double wx = robot_x + (local_pt.first * cos_yaw - local_pt.second * sin_yaw);
+      double wy = robot_y + (local_pt.first * sin_yaw + local_pt.second * cos_yaw);
+      min_wx = std::min(min_wx, wx);
+      max_wx = std::max(max_wx, wx);
+      min_wy = std::min(min_wy, wy);
+      max_wy = std::max(max_wy, wy);
+    }
+
+    // map座標系で軸並行なバウンディングボックス（サブマップ）を定義
+    double submap_origin_x = min_wx;
+    double submap_origin_y = min_wy;
+    int submap_width = static_cast<int>(std::ceil((max_wx - min_wx) / resolution));
+    int submap_height = static_cast<int>(std::ceil((max_wy - min_wy) / resolution));
+
     auto merged = std::make_shared<nav2_costmap_2d::Costmap2D>(
-      submap_width, submap_height, resolution, 
+      submap_width, submap_height, resolution,
       submap_origin_x, submap_origin_y);
-    
+
     unsigned char* merged_data = merged->getCharMap();
-    std::fill(merged_data, merged_data + submap_width * submap_height, 
-              nav2_costmap_2d::FREE_SPACE);
-    
+    std::fill(merged_data, merged_data + submap_width * submap_height, nav2_costmap_2d::FREE_SPACE);
+
+    // 元のコストマップからサブマップへデータをコピー
     double costmap_origin_x = costmap_copy->info.origin.position.x;
     double costmap_origin_y = costmap_copy->info.origin.position.y;
-    
+    int costmap_w = static_cast<int>(costmap_copy->info.width);
+    int costmap_h = static_cast<int>(costmap_copy->info.height);
+
     for (int sy = 0; sy < submap_height; ++sy) {
       for (int sx = 0; sx < submap_width; ++sx) {
-        double wx = submap_origin_x + sx * resolution;
-        double wy = submap_origin_y + sy * resolution;
-        
-        int cx = static_cast<int>((wx - costmap_origin_x) / resolution);
-        int cy = static_cast<int>((wy - costmap_origin_y) / resolution);
-        
-        if (cx >= 0 && cx < static_cast<int>(costmap_copy->info.width) &&
-            cy >= 0 && cy < static_cast<int>(costmap_copy->info.height)) {
-          int costmap_idx = cy * costmap_copy->info.width + cx;
+        double wx = submap_origin_x + (sx + 0.5) * resolution;
+        double wy = submap_origin_y + (sy + 0.5) * resolution;
+
+        int cx, cy;
+        merged->worldToMapNoBounds(wx, wy, cx, cy); // この関数は内部でチェックするため安全
+
+        int costmap_mx = static_cast<int>((wx - costmap_origin_x) / resolution);
+        int costmap_my = static_cast<int>((wy - costmap_origin_y) / resolution);
+
+        if (costmap_mx >= 0 && costmap_mx < costmap_w && costmap_my >= 0 && costmap_my < costmap_h) {
+          int costmap_idx = costmap_my * costmap_w + costmap_mx;
           int8_t cost = costmap_copy->data[costmap_idx];
-          
+
           if (cost == -1) {
-            merged_data[sy * submap_width + sx] = nav2_costmap_2d::NO_INFORMATION;
+            merged->setCost(cx, cy, nav2_costmap_2d::NO_INFORMATION);
           } else if (cost >= costmap_threshold_) {
-            merged_data[sy * submap_width + sx] = nav2_costmap_2d::LETHAL_OBSTACLE;
+            merged->setCost(cx, cy, nav2_costmap_2d::LETHAL_OBSTACLE);
           }
         }
       }
     }
-    
-    std::vector<pcl::PointXYZ> points_copy;
-    {
-      std::lock_guard<std::mutex> lock(pointcloud_mutex_);
-      points_copy = cached_points_;
-    }
-    
-    int points_added = 0;
-    for (const auto &pt : points_copy) {
-      int sx = static_cast<int>((pt.x - submap_origin_x) / resolution);
-      int sy = static_cast<int>((pt.y - submap_origin_y) / resolution);
-      
-      if (sx >= 0 && sx < submap_width && sy >= 0 && sy < submap_height) {
-        merged_data[sy * submap_width + sx] = nav2_costmap_2d::LETHAL_OBSTACLE;
-        points_added++;
-      }
-    }
-    
     return merged;
   }
 
@@ -326,7 +355,6 @@ private:
 
     pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
     tree->setInputCloud(cloud);
-
     std::vector<pcl::PointIndices> cluster_indices;
     pcl::EuclideanClusterExtraction<pcl::PointXYZ> extractor;
     extractor.setClusterTolerance(cluster_tolerance_);
@@ -393,27 +421,63 @@ private:
     marker.scale.x = 0.05;
     marker.color.r = 1.0;
     marker.color.a = 0.8;
-    
+
+    const int circle_segments = 24;
+    const float cross_size = 0.15f;
+
     for (const auto& obstacle : msg->obstacles) {
-      const auto& points = obstacle.polygon.points;
-      if (points.size() < 2) continue;
-      
-      for (size_t i = 0; i < points.size(); ++i) {
-        size_t next_i = (i + 1) % points.size();
-        
-        geometry_msgs::msg::Point p1, p2;
-        p1.x = points[i].x;
-        p1.y = points[i].y;
-        p1.z = 0.0;
-        p2.x = points[next_i].x;
-        p2.y = points[next_i].y;
-        p2.z = 0.0;
-        
-        marker.points.push_back(p1);
-        marker.points.push_back(p2);
+      const auto& pts = obstacle.polygon.points;
+
+      if (pts.size() >= 2) {
+        for (size_t i = 0; i < pts.size(); ++i) {
+          size_t next_i = (i + 1) % pts.size();
+          geometry_msgs::msg::Point p1, p2;
+          p1.x = pts[i].x; p1.y = pts[i].y; p1.z = pts[i].z;
+          p2.x = pts[next_i].x; p2.y = pts[next_i].y; p2.z = pts[next_i].z;
+          marker.points.push_back(p1);
+          marker.points.push_back(p2);
+        }
+      } else if (pts.size() == 1 && obstacle.radius > 0.0f) {
+        // 円（中心 pts[0]、半径 obstacle.radius）を近似して描画
+        geometry_msgs::msg::Point center;
+        center.x = pts[0].x; center.y = pts[0].y; center.z = pts[0].z;
+        std::vector<geometry_msgs::msg::Point> circ_pts(circle_segments);
+        for (int i = 0; i < circle_segments; ++i) {
+          double ang = 2.0 * M_PI * static_cast<double>(i) / static_cast<double>(circle_segments);
+          geometry_msgs::msg::Point p;
+          p.x = center.x + static_cast<double>(obstacle.radius) * std::cos(ang);
+          p.y = center.y + static_cast<double>(obstacle.radius) * std::sin(ang);
+          p.z = center.z;
+          circ_pts[i] = p;
+        }
+        for (int i = 0; i < circle_segments; ++i) {
+          int ni = (i + 1) % circle_segments;
+          marker.points.push_back(circ_pts[i]);
+          marker.points.push_back(circ_pts[ni]);
+        }
+        // optionally draw center as small cross
+        geometry_msgs::msg::Point c1, c2, c3, c4;
+        c1.x = center.x - cross_size; c1.y = center.y; c1.z = center.z;
+        c2.x = center.x + cross_size; c2.y = center.y; c2.z = center.z;
+        c3.x = center.x; c3.y = center.y - cross_size; c3.z = center.z;
+        c4.x = center.x; c4.y = center.y + cross_size; c4.z = center.z;
+        marker.points.push_back(c1); marker.points.push_back(c2);
+        marker.points.push_back(c3); marker.points.push_back(c4);
+
+      } else if (pts.size() == 1) {
+        // 半径が無い単一点は小さな十字で可視化
+        geometry_msgs::msg::Point center;
+        center.x = pts[0].x; center.y = pts[0].y; center.z = pts[0].z;
+        geometry_msgs::msg::Point c1, c2, c3, c4;
+        c1.x = center.x - cross_size; c1.y = center.y; c1.z = center.z;
+        c2.x = center.x + cross_size; c2.y = center.y; c2.z = center.z;
+        c3.x = center.x; c3.y = center.y - cross_size; c3.z = center.z;
+        c4.x = center.x; c4.y = center.y + cross_size; c4.z = center.z;
+        marker.points.push_back(c1); marker.points.push_back(c2);
+        marker.points.push_back(c3); marker.points.push_back(c4);
       }
     }
-    
+
     obstacle_marker_pub_->publish(marker);
   }
 
@@ -443,6 +507,9 @@ private:
   int costmap_threshold_;
   double submap_size_x_;
   double submap_size_y_;
+  double submap_front_;
+  double submap_rear_;
+  double submap_side_;
   std::string target_frame_;
   double pc_min_dist_;
   double pc_max_dist_;
