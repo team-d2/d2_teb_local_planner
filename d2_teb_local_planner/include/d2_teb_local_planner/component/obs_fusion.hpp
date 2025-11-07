@@ -10,10 +10,12 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/segmentation/extract_clusters.h>
 #include <nav2_costmap_2d/costmap_2d.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
+#include <chrono>
 
 namespace d2_teb_local_planner
 {
@@ -40,6 +42,11 @@ public:
     this->declare_parameter("pointcloud_min_height", -0.75);
     this->declare_parameter("pointcloud_max_height", 2.0);
     this->declare_parameter("voxel_leaf_size", 0.1);
+    this->declare_parameter("cluster_tolerance", 0.4);
+    this->declare_parameter("cluster_min_points", 6);
+    this->declare_parameter("cluster_max_points", 200);
+    this->declare_parameter("cluster_max_clusters", 120);
+    this->declare_parameter("cluster_max_radius", 0.8);
     
     std::string plugin_name = this->get_parameter("costmap_converter_plugin").as_string();
     converter_rate_ = this->get_parameter("converter_rate").as_double();
@@ -51,9 +58,15 @@ public:
     pc_max_dist_ = this->get_parameter("pointcloud_max_distance").as_double();
     pc_min_height_ = this->get_parameter("pointcloud_min_height").as_double();
     pc_max_height_ = this->get_parameter("pointcloud_max_height").as_double();
-    double voxel_size = this->get_parameter("voxel_leaf_size").as_double();
 
+    double voxel_size = this->get_parameter("voxel_leaf_size").as_double();
     voxel_filter_.setLeafSize(voxel_size, voxel_size, voxel_size);
+
+    cluster_tolerance_ = this->get_parameter("cluster_tolerance").as_double();
+    cluster_min_points_ = std::max<int>(1, this->get_parameter("cluster_min_points").as_int());
+    cluster_max_points_ = std::max<int>(cluster_min_points_, this->get_parameter("cluster_max_points").as_int());
+    cluster_max_clusters_ = std::max<int>(1, this->get_parameter("cluster_max_clusters").as_int());
+    cluster_max_radius_ = this->get_parameter("cluster_max_radius").as_double();
 
     try {
       costmap_converter_ = costmap_converter_loader_.createSharedInstance(plugin_name);
@@ -163,7 +176,11 @@ private:
   
   void computeAndPublish()
   {
+    const std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
     auto merged_costmap = buildMergedCostmap();
+    const std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
+    const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+    RCLCPP_INFO(this->get_logger(), "Merged costmap built in %ld ms", duration_ms);
     if (!merged_costmap) {
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                            "Failed to build merged costmap");
@@ -183,17 +200,28 @@ private:
     obstacles_msg->header.stamp = this->now();
     obstacles_msg->header.frame_id = target_frame_;
     
-    for (const auto& poly : *polygons) {
-      d2_costmap_converter_msgs::msg::ObstacleMsg obstacle;
-      obstacle.polygon = poly;
-      obstacles_msg->obstacles.push_back(obstacle);
+    if (polygons) {
+      for (const auto& poly : *polygons) {
+        d2_costmap_converter_msgs::msg::ObstacleMsg obstacle;
+        obstacle.orientation.w = 1.0;
+        obstacle.polygon = poly;
+        obstacles_msg->obstacles.push_back(obstacle);
+      }
+    }
+    
+    appendPointClusters(*obstacles_msg);
+    if (obstacles_msg->obstacles.empty()) {
+      return;
     }
     
     obstacle_pub_->publish(*obstacles_msg);
-    // publishObstaclesAsMarker(obstacles_msg);
-    
-    RCLCPP_DEBUG(this->get_logger(), "Published %zu obstacles", 
+    publishObstaclesAsMarker(obstacles_msg);
+
+    RCLCPP_INFO(this->get_logger(), "Published %zu obstacles",
                  obstacles_msg->obstacles.size());
+    const std::chrono::steady_clock::time_point total_end_time = std::chrono::steady_clock::now();
+    const auto total_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_end_time - start_time).count();
+    RCLCPP_INFO(this->get_logger(), "Total compute and publish time: %ld ms", total_duration_ms);
   }
 
   std::shared_ptr<nav2_costmap_2d::Costmap2D> buildMergedCostmap()
@@ -277,6 +305,81 @@ private:
     return merged;
   }
 
+  void appendPointClusters(d2_costmap_converter_msgs::msg::ObstacleArrayMsg & msg)
+  {
+    std::vector<pcl::PointXYZ> points_copy;
+    {
+      std::lock_guard<std::mutex> lock(pointcloud_mutex_);
+      points_copy = cached_points_;
+    }
+    if (points_copy.size() < static_cast<std::size_t>(cluster_min_points_)) {
+      return;
+    }
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    cloud->points.resize(points_copy.size());
+    for (std::size_t i = 0; i < points_copy.size(); ++i) {
+      cloud->points[i] = points_copy[i];
+    }
+    cloud->width = cloud->points.size();
+    cloud->height = 1;
+
+    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
+    tree->setInputCloud(cloud);
+
+    std::vector<pcl::PointIndices> cluster_indices;
+    pcl::EuclideanClusterExtraction<pcl::PointXYZ> extractor;
+    extractor.setClusterTolerance(cluster_tolerance_);
+    extractor.setMinClusterSize(cluster_min_points_);
+    extractor.setMaxClusterSize(cluster_max_points_);
+    extractor.setSearchMethod(tree);
+    extractor.setInputCloud(cloud);
+    extractor.extract(cluster_indices);
+
+    std::size_t appended = 0;
+    for (const auto & cluster : cluster_indices) {
+      if (appended >= static_cast<std::size_t>(cluster_max_clusters_)) {
+        break;
+      }
+      if (cluster.indices.empty()) {
+        continue;
+      }
+
+      Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+      for (int idx : cluster.indices) {
+        const auto & pt = cloud->points[static_cast<std::size_t>(idx)];
+        centroid += Eigen::Vector3d(pt.x, pt.y, pt.z);
+      }
+      centroid /= static_cast<double>(cluster.indices.size());
+
+      double radius = 0.0;
+      for (int idx : cluster.indices) {
+        const auto & pt = cloud->points[static_cast<std::size_t>(idx)];
+        Eigen::Vector2d diff(pt.x - centroid.x(), pt.y - centroid.y());
+        radius = std::max(radius, diff.norm());
+      }
+      if (cluster_max_radius_ > 0.0) {
+        radius = std::min(radius, cluster_max_radius_);
+      }
+
+      d2_costmap_converter_msgs::msg::ObstacleMsg obstacle;
+      obstacle.id = static_cast<int32_t>(msg.obstacles.size());
+      obstacle.orientation.w = 1.0;
+      obstacle.radius = radius;
+      obstacle.polygon.points.resize(1);
+      obstacle.polygon.points[0].x = static_cast<float>(centroid.x());
+      obstacle.polygon.points[0].y = static_cast<float>(centroid.y());
+      obstacle.polygon.points[0].z = static_cast<float>(centroid.z());
+
+      msg.obstacles.push_back(obstacle);
+      ++appended;
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+                 "Clustered %zu obstacles from %zu points (kept %zu)",
+                 appended, points_copy.size(), msg.obstacles.size());
+  }
+
   void publishObstaclesAsMarker(
     const d2_costmap_converter_msgs::msg::ObstacleArrayMsg::SharedPtr msg)
   {
@@ -345,6 +448,12 @@ private:
   double pc_max_dist_;
   double pc_min_height_;
   double pc_max_height_;
+
+  double cluster_tolerance_;
+  int cluster_min_points_;
+  int cluster_max_points_;
+  int cluster_max_clusters_;
+  double cluster_max_radius_;
 };
 
 } // namespace d2_teb_local_planner

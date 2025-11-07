@@ -332,6 +332,8 @@ private:
     {
         std::lock_guard<std::mutex> lock(obstacle_mutex_);
         obstacles_.clear();
+
+        RCLCPP_INFO(this->get_logger(), "Received %zu obstacles", msg->obstacles.size());
         
         for (const auto& obstacle_msg : msg->obstacles) {
             if (obstacle_msg.polygon.points.size() == 1) {
@@ -422,7 +424,7 @@ private:
         bool success = planner_->plan(pruned_plan, &robot_vel, cfg_->goal_tolerance.free_goal_vel);
         const std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
         const double planning_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-        RCLCPP_DEBUG(this->get_logger(), "Planning time: %.2f ms", planning_time);
+        RCLCPP_INFO(this->get_logger(), "Planning time: %.2f ms", planning_time);
 
         if (!success) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
