@@ -1,4 +1,4 @@
-costmap_manager:
+/**:
   ros__parameters:
     global_frame: "map"
     robot_base_frame: "base_link"

@@ -1,4 +1,4 @@
-teb_motion_standalone:
+/**:
   ros__parameters:
     # Trajectory
     teb_autosize: true

@@ -192,7 +192,7 @@ private:
     
     costmap_converter_->setCostmap2D(merged_costmap.get());
     costmap_converter_->compute();
-    
+
     auto polygons = costmap_converter_->getPolygons();
     if (!polygons || polygons->empty()) {
       RCLCPP_WARN(this->get_logger(), "No obstacles detected");
@@ -221,11 +221,11 @@ private:
     obstacle_pub_->publish(*obstacles_msg);
     publishObstaclesAsMarker(obstacles_msg);
 
-    RCLCPP_INFO(this->get_logger(), "Published %zu obstacles",
+    RCLCPP_DEBUG(this->get_logger(), "Published %zu obstacles",
                  obstacles_msg->obstacles.size());
     const std::chrono::steady_clock::time_point total_end_time = std::chrono::steady_clock::now();
     const auto total_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_end_time - start_time).count();
-    RCLCPP_INFO(this->get_logger(), "Total compute and publish time: %ld ms", total_duration_ms);
+    RCLCPP_DEBUG(this->get_logger(), "Total compute and publish time: %ld ms", total_duration_ms);
   }
 
   std::shared_ptr<nav2_costmap_2d::Costmap2D> buildMergedCostmap()
@@ -403,7 +403,7 @@ private:
       ++appended;
     }
 
-    RCLCPP_INFO(this->get_logger(),
+    RCLCPP_DEBUG(this->get_logger(),
                  "Clustered %zu obstacles from %zu points (kept %zu)",
                  appended, points_copy.size(), msg.obstacles.size());
   }

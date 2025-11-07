@@ -333,9 +333,13 @@ private:
         std::lock_guard<std::mutex> lock(obstacle_mutex_);
         obstacles_.clear();
 
-        RCLCPP_DEBUG(this->get_logger(), "Received %zu obstacles", msg->obstacles.size());
-        
+        int counter = 0;
         for (const auto& obstacle_msg : msg->obstacles) {
+            if (counter >= 500) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                    "Maximum obstacle count reached, further obstacles are ignored!");
+                break;
+            }
             if (obstacle_msg.polygon.points.size() == 1) {
                 if (obstacle_msg.radius > 0) {
                     obstacles_.push_back(std::make_shared<CircularObstacle>(
@@ -343,11 +347,13 @@ private:
                         obstacle_msg.polygon.points[0].y,
                         obstacle_msg.radius
                     ));
+                    counter++;
                 } else {
                     obstacles_.push_back(std::make_shared<PointObstacle>(
                         obstacle_msg.polygon.points[0].x,
                         obstacle_msg.polygon.points[0].y
                     ));
+                    counter++;
                 }
             } else if (obstacle_msg.polygon.points.size() > 1) {
                 PolygonObstacle* poly_obst = new PolygonObstacle();
@@ -356,6 +362,7 @@ private:
                 }
                 poly_obst->finalizePolygon();
                 obstacles_.push_back(ObstaclePtr(poly_obst));
+                counter++;
             }
         }
     }
