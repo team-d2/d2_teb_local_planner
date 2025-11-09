@@ -1,4 +1,4 @@
-image: sample_map.pgm        # ← 実際の .pgm/.png ファイル名に置き換えてください
+image: daigaku_costmap.pgm        # ← 実際の .pgm/.png ファイル名に置き換えてください
 resolution: 0.05            # [m/cell]
 origin: [0.0, 0.0, 0.0]     # map の原点 (x, y, theta)
 negate: 0                   # 0 or 1 (画像の色反転が必要な場合 1)
