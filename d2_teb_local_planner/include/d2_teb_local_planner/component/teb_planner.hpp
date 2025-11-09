@@ -337,8 +337,7 @@ private:
         for (const auto& obstacle_msg : msg->obstacles) {
             if (counter >= 500) {
                 RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                    "Maximum obstacle count reached, further obstacles are ignored!");
-                break;
+                                    "Too many obstacles received !!!");
             }
             if (obstacle_msg.polygon.points.size() == 1) {
                 if (obstacle_msg.radius > 0) {
@@ -395,6 +394,22 @@ private:
         {
             std::lock_guard<std::mutex> lock(via_mutex_);
             global_plan = global_plan_;
+        }
+
+        // グローバルパスが0の場合はcmd_velを0にして終了
+        if (global_plan.poses.empty()) {
+            if (!switched_) {
+                // 一回だけ停止コマンドを送る (残存防止)
+                geometry_msgs::msg::Twist stop_cmd;
+                stop_cmd.linear.x = 0.0;
+                stop_cmd.linear.y = 0.0;
+                stop_cmd.angular.z = 0.0;
+                cmd_pub_->publish(stop_cmd);
+                switched_ = true;
+            }
+            return;
+        } else {
+            switched_ = false;
         }
 
         std::vector<geometry_msgs::msg::PoseStamped> initial_plan = global_plan.poses;
@@ -480,6 +495,7 @@ private:
     PoseSE2 goal_pose_;
     geometry_msgs::msg::Twist robot_vel_;
     bool has_global_plan_ = false;
+    bool switched_ = false;
     
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
     
