@@ -1182,8 +1182,18 @@ bool TebOptimalPlanner::getVelocityCommandMyj(double& vx, double& vy, double& om
     return false;
   }
 
-  vx = (pose.x() - teb_.Pose(0).x()) / dt;
-  vy = (pose.y() - teb_.Pose(0).y()) / dt;
+  if (dt <= 0)
+  {
+    RCLCPP_ERROR(node_->get_logger(), "myj: Invalid dt = %f", dt);
+    vx = 0;
+    vy = 0;
+    omega = 0;
+    return true;
+  }
+
+  const Eigen::Vector2d position_relative = Eigen::Rotation2Dd(-teb_.Pose(0).theta()) * (pose.position() - teb_.Pose(0).position());
+  vx = position_relative.x() / dt;
+  vy = position_relative.y() / dt;
   double orientdiff = pose.theta() - teb_.Pose(0).theta();
   while (orientdiff > M_PI) orientdiff -= 2 * M_PI;
   while (orientdiff < -M_PI) orientdiff += 2 * M_PI;
@@ -1208,7 +1218,7 @@ bool TebOptimalPlanner::getDtPose(PoseSE2 & pose, double & dt) const
   const double target_dt = dt;
   dt = 0.0;
   auto max_index = teb_.sizePoses() - 1;
-  for (int i = 0; i < teb_.sizePoses(); ++i)
+  for (int i = 0; i < max_index; ++i)
   {
     const auto time_diff = teb_.TimeDiff(i);
     if (dt + time_diff >= target_dt)
@@ -1222,6 +1232,7 @@ bool TebOptimalPlanner::getDtPose(PoseSE2 & pose, double & dt) const
       dt = target_dt;
       return true;
     }
+    dt += time_diff;
   }
   pose = teb_.BackPose();
   return true;
