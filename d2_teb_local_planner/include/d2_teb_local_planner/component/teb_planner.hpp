@@ -406,10 +406,14 @@ private:
                 stop_cmd.angular.z = 0.0;
                 cmd_pub_->publish(stop_cmd);
                 switched_ = true;
+                RCLCPP_INFO(this->get_logger(), "Global plan is empty. STOP TEB planner.");
             }
             return;
         } else {
-            switched_ = false;
+            if (switched_) {
+                switched_ = false;
+                RCLCPP_INFO(this->get_logger(), "Global plan received. RESUME TEB planner.");
+            }
         }
 
         std::vector<geometry_msgs::msg::PoseStamped> initial_plan = global_plan.poses;
