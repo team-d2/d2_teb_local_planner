@@ -1169,6 +1169,64 @@ bool TebOptimalPlanner::getVelocityCommand(double& vx, double& vy, double& omega
   return true;
 }
 
+bool TebOptimalPlanner::getVelocityCommandMyj(double& vx, double& vy, double& omega, const double target_dt) const
+{
+  double dt = target_dt;
+  PoseSE2 pose;
+  if (!this->getDtPose(pose, dt))
+  {
+    RCLCPP_ERROR(node_->get_logger(), "myj: Failed to get pose at dt = %f", dt);
+    vx = 0;
+    vy = 0;
+    omega = 0;
+    return false;
+  }
+
+  vx = (pose.x() - teb_.Pose(0).x()) / dt;
+  vy = (pose.y() - teb_.Pose(0).y()) / dt;
+  double orientdiff = pose.theta() - teb_.Pose(0).theta();
+  while (orientdiff > M_PI) orientdiff -= 2 * M_PI;
+  while (orientdiff < -M_PI) orientdiff += 2 * M_PI;
+  omega = orientdiff / dt;
+  return true;
+}
+
+bool TebOptimalPlanner::getDtPose(PoseSE2 & pose, double & dt) const
+{
+  if (teb_.sizePoses() == 0)
+  {
+    RCLCPP_ERROR(node_->get_logger(), "myj: Teb path is empty!");
+    return false;
+  }
+  else if (teb_.sizePoses() == 1)
+  {
+    RCLCPP_ERROR(node_->get_logger(), "myj: Teb path has only one pose!");
+    pose = teb_.Pose(0);
+    return true;
+  }
+
+  const double target_dt = dt;
+  dt = 0.0;
+  auto max_index = teb_.sizePoses() - 1;
+  for (int i = 0; i < teb_.sizePoses(); ++i)
+  {
+    const auto time_diff = teb_.TimeDiff(i);
+    if (dt + time_diff >= target_dt)
+    {
+      const double ratio = (target_dt - dt) / time_diff;
+      const auto & pose1 = teb_.Pose(i);
+      const auto & pose2 = teb_.Pose(i + 1);
+      pose.x() = pose1.x() + ratio * (pose2.x() - pose1.x());
+      pose.y() = pose1.y() + ratio * (pose2.y() - pose1.y());
+      pose.theta() = g2o::normalize_theta(pose1.theta() + ratio * g2o::normalize_theta(pose2.theta() - pose1.theta()));
+      dt = target_dt;
+      return true;
+    }
+  }
+  pose = teb_.BackPose();
+  return true;
+}
+
 void TebOptimalPlanner::getVelocityProfile(std::vector<geometry_msgs::msg::Twist>& velocity_profile) const
 {
   int n = teb_.sizePoses();

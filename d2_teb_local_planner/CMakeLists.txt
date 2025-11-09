@@ -59,6 +59,7 @@ find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(glog REQUIRED)
 
 message(STATUS "System: ${CMAKE_SYSTEM}")
 ## System dependencies are found with CMake's conventions
@@ -135,6 +136,7 @@ ament_target_dependencies(d2_teb_local_planner
 )
 target_link_libraries(d2_teb_local_planner
    ${EXTERNAL_LIBS}
+   glog
 )
 
 target_compile_definitions(d2_teb_local_planner PUBLIC "PLUGINLIB__DISABLE_BOOST_FUNCTIONS")

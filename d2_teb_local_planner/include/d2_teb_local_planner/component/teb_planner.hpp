@@ -460,8 +460,9 @@ private:
 
         // Get velocity command
         double vx = 0, vy = 0, omega = 0;
-        if (!planner_->getVelocityCommand(vx, vy, omega, 
-                                        cfg_->trajectory.control_look_ahead_poses)) {
+        if (!planner_->getVelocityCommandMyj(vx, vy, omega, 
+                                        // cfg_->trajectory.control_look_ahead_poses)) {
+                                        0.2)) { //
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                 "Failed to get velocity command!");
             return;

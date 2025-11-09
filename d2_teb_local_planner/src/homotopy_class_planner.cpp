@@ -145,6 +145,21 @@ bool HomotopyClassPlanner::getVelocityCommand(double& vx, double& vy, double& om
 }
 
 
+bool HomotopyClassPlanner::getVelocityCommandMyj(double& vx, double& vy, double& omega, const double target_dt) const
+{
+  TebOptimalPlannerConstPtr best_teb = bestTeb();
+  if (!best_teb)
+  {
+    vx = 0;
+    vy = 0;
+    omega = 0;
+    return false;
+  }
+
+  return best_teb->getVelocityCommandMyj(vx, vy, omega, target_dt);
+}
+
+
 
 
 void HomotopyClassPlanner::visualize()
