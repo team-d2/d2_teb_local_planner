@@ -53,8 +53,8 @@ controller_server:
 
       # Optimization
           
-      no_inner_iterations: 5
-      no_outer_iterations: 4
+      no_inner_iterations: 7
+      no_outer_iterations: 6
       optimization_activate: True
       optimization_verbose: False
       penalty_epsilon: 0.1
@@ -84,14 +84,13 @@ controller_server:
       selection_prefer_initial_plan: 1.0
       selection_obst_cost_scale: 1.0
       selection_alternative_time_cost: True
-
       roadmap_graph_no_samples: 15
       roadmap_graph_area_width: 5.0
       roadmap_graph_area_length_scale: 1.0
       h_signature_prescaler: 0.5
       h_signature_threshold: 0.1
       obstacle_heading_threshold: 0.45
-      switching_blocking_period: 0.0
+      switching_blocking_period: 3.0
       viapoints_all_candidates: True
       delete_detours_backwards: True
       max_ratio_detours_duration_best_duration: 3.0

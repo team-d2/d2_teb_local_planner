@@ -455,6 +455,7 @@ private:
         if (!success) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                 "Planning failed!");
+            planner_->clearPlanner();
             return;
         }
 
