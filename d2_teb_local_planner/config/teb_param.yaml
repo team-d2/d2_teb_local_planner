@@ -87,6 +87,18 @@
     obstacle_heading_threshold: 0.45
     viapoints_all_candidates: true
     visualize_hc_graph: false
+
+    # Recovery
+    shrink_horizon_backup: True
+    shrink_horizon_min_duration: 10.0
+    oscillation_recovery: True
+    oscillation_v_eps: 0.1
+    oscillation_omega_eps: 0.1
+    oscillation_recovery_min_duration: 10.0
+    oscillation_filter_duration: 10.0
+
+    # Other
+    predict_pose: true
     
     # Footprint model
     footprint_model:
