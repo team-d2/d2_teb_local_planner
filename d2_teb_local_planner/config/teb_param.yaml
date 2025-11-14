@@ -15,7 +15,7 @@
     force_reinit_new_goal_dist: 1.0
     force_reinit_new_goal_angular: 1.57
     feasibility_check_no_poses: 5
-    publish_feedback: false
+    publish_feedback: true
     control_look_ahead_poses: 2
     control_rate: 10.0
     
@@ -92,8 +92,8 @@
     shrink_horizon_backup: True
     shrink_horizon_min_duration: 10.0
     oscillation_recovery: True
-    oscillation_v_eps: 0.1
-    oscillation_omega_eps: 0.1
+    oscillation_v_eps: 0.15
+    oscillation_omega_eps: 0.15
     oscillation_recovery_min_duration: 10.0
     oscillation_filter_duration: 10.0
 
