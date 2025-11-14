@@ -158,6 +158,17 @@ private:
         this->declare_parameter("footprint_model.radius", 0.3);
         this->declare_parameter("footprint_model.vertices", std::vector<double>{});
 
+        // Recovery
+        this->declare_parameter("oscillation_avoidance", cfg_->recovery.oscillation_avoidance);
+        this->declare_parameter("oscillation_omega_eps", cfg_->recovery.oscillation_omega_eps);
+        this->declare_parameter("oscillation_recovery_min_duration", cfg_->recovery.oscillation_recovery_min_duration);
+        this->declare_parameter("oscillation_filter_duration", cfg_->recovery.oscillation_filter_duration);
+        this->declare_parameter("divergence_detection_enable", cfg_->recovery.divergence_detection_enable);
+        this->declare_parameter("divergence_detection_max_chi_squared", cfg_->recovery.divergence_detection_max_chi_squared);
+        
+        // Other
+        this->declare_parameter("predict_pose", cfg_->other.predict_pose);
+
         // Get parameters
         cfg_->trajectory.teb_autosize = this->get_parameter("teb_autosize").as_bool();
         cfg_->trajectory.dt_ref = this->get_parameter("dt_ref").as_double();
@@ -243,6 +254,15 @@ private:
         cfg_->hcp.viapoints_all_candidates = this->get_parameter("viapoints_all_candidates").as_bool();
         cfg_->hcp.visualize_hc_graph = this->get_parameter("visualize_hc_graph").as_bool();
 
+        cfg_->recovery.oscillation_avoidance = this->get_parameter("oscillation_avoidance").as_bool();
+        cfg_->recovery.oscillation_omega_eps = this->get_parameter("oscillation_omega_eps").as_double();
+        cfg_->recovery.oscillation_recovery_min_duration = this->get_parameter("oscillation_recovery_min_duration").as_double();
+        cfg_->recovery.oscillation_filter_duration = this->get_parameter("oscillation_filter_duration").as_double();
+        cfg_->recovery.divergence_detection_enable = this->get_parameter("divergence_detection_enable").as_bool();
+        cfg_->recovery.divergence_detection_max_chi_squared = this->get_parameter("divergence_detection_max_chi_squared").as_double();
+        
+        cfg_->other.predict_pose = this->get_parameter("predict_pose").as_bool();
+
         // Footprint model
         std::string footprint_type = this->get_parameter("footprint_model.type").as_string();
         if (footprint_type == "circular") {
@@ -324,6 +344,7 @@ private:
     void odomCB(const nav_msgs::msg::Odometry::SharedPtr msg)
     {
         std::lock_guard<std::mutex> lock(odom_mutex_);
+        last_odom_stamp_ = rclcpp::Time(msg->header.stamp);
         robot_pose_ = PoseSE2(msg->pose.pose);
         robot_vel_ = msg->twist.twist;
     }
@@ -382,13 +403,27 @@ private:
     void controlLoop() {
         if (!has_global_plan_) return;
 
+        const rclcpp::Time now = this->get_clock()->now();
+
         PoseSE2 robot_pose;
         geometry_msgs::msg::Twist robot_vel;
         nav_msgs::msg::Path global_plan;
-        
         {
             std::lock_guard<std::mutex> lock(odom_mutex_);
-            robot_pose = robot_pose_;
+            const double deltay = (now - last_odom_stamp_).seconds();
+            if (deltay > 0.5) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                    "No odometry received for %.2f seconds.", deltay);
+            }
+            if (cfg_->other.predict_pose) {
+                robot_pose = PoseSE2(
+                    robot_pose_.x() + robot_vel_.linear.x * std::cos(robot_pose_.theta()) * deltay,
+                    robot_pose_.y() + robot_vel_.linear.x * std::sin(robot_pose_.theta()) * deltay,
+                    robot_pose_.theta() + robot_vel_.angular.z * deltay
+                );
+            } else {
+                robot_pose = robot_pose_;
+            }
             robot_vel = robot_vel_;
         }
         {
@@ -497,6 +532,7 @@ private:
     std::vector<Eigen::Vector2d, Eigen::aligned_allocator<Eigen::Vector2d>> via_points_;
     nav_msgs::msg::Path global_plan_;
     
+    rclcpp::Time last_odom_stamp_;
     PoseSE2 robot_pose_;
     PoseSE2 goal_pose_;
     geometry_msgs::msg::Twist robot_vel_;

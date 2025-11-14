@@ -232,6 +232,11 @@ public:
     int divergence_detection_max_chi_squared; //!< Maximum acceptable Mahalanobis distance above which it is assumed that the optimization diverged.
   } recovery; //!< Parameters related to recovery and backup strategies
 
+  struct Other
+  {
+    bool predict_pose; //!< If true, the robot pose is predicted forward using the last velocity command and the time difference since the last odometry message
+  } other; //!< Other parameters
+
 
   /**
   * @brief Construct the TebConfig using default values.
@@ -388,6 +393,10 @@ public:
     recovery.oscillation_filter_duration = 10;
     recovery.divergence_detection_enable = false;
     recovery.divergence_detection_max_chi_squared = 10;
+
+
+    // Other
+    other.predict_pose = false;
   }
   
   void declareParameters(const nav2_util::LifecycleNode::SharedPtr, const std::string name);
