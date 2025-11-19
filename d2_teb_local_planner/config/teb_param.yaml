@@ -16,8 +16,9 @@
     force_reinit_new_goal_angular: 1.57
     feasibility_check_no_poses: 5
     publish_feedback: true
-    control_look_ahead_poses: 2
-    control_rate: 10.0
+    # control_look_ahead_poses: 2
+    control_rate: 100.0
+    planning_rate: 10.0
     
     # Robot
     max_vel_x: 0.5
