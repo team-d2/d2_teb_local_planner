@@ -144,7 +144,7 @@ public:
    */
   virtual bool getVelocityCommand(double& vx, double& vy, double& omega, int look_ahead_poses) const = 0;
 
-  virtual bool getVelocityCommandMyj(double& vx, double& vy, double& omega, const double target_dt) const = 0;
+  virtual std::map<double, PoseSE2> createTebPoseMap() const;
   
   //@}
   
