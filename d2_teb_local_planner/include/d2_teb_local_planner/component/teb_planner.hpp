@@ -55,9 +55,14 @@ public:
             "/wp_global_plan", 10,
             std::bind(&TebMotionStandaloneComponent::globalPlanCB, this, std::placeholders::_1));
 
+        auto control_callback_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
         control_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(static_cast<int>(1000.0 / control_rate_)),
-            std::bind(&TebMotionStandaloneComponent::controlLoop, this));
+            std::bind(&TebMotionStandaloneComponent::controlLoop, this), control_callback_group);
+        
+        planning_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(static_cast<int>(1000.0 / planning_rate_)),
+            std::bind(&TebMotionStandaloneComponent::planningLoop, this));
 
         RCLCPP_INFO(this->get_logger(), "TEB Motion Standalone Component initialized");
     }
@@ -189,6 +194,7 @@ private:
         // cfg_->trajectory.control_rate = this->get_parameter("control_rate").as_double();
 
         control_rate_ = this->get_parameter("control_rate").as_double();
+        planning_rate_ = this->get_parameter("planning_rate").as_double();
 
         cfg_->robot.max_vel_x = this->get_parameter("max_vel_x").as_double();
         cfg_->robot.max_vel_x_backwards = this->get_parameter("max_vel_x_backwards").as_double();
@@ -400,7 +406,7 @@ private:
         }
     }
 
-    void controlLoop() {
+    void planningLoop() {
         if (!has_global_plan_) return;
 
         const rclcpp::Time now = this->get_clock()->now();
@@ -420,22 +426,9 @@ private:
 
         // グローバルパスが0の場合はcmd_velを0にして終了
         if (global_plan.poses.empty()) {
-            if (!switched_) {
-                // 一回だけ停止コマンドを送る (残存防止)
-                geometry_msgs::msg::Twist stop_cmd;
-                stop_cmd.linear.x = 0.0;
-                stop_cmd.linear.y = 0.0;
-                stop_cmd.angular.z = 0.0;
-                cmd_pub_->publish(stop_cmd);
-                switched_ = true;
-                RCLCPP_INFO(this->get_logger(), "Global plan is empty. STOP TEB planner.");
-            }
+            std::lock_guard<std::mutex> lock(teb_pose_map_mutex_);
+            teb_pose_map_.clear();
             return;
-        } else {
-            if (switched_) {
-                switched_ = false;
-                RCLCPP_INFO(this->get_logger(), "Global plan received. RESUME TEB planner.");
-            }
         }
 
         std::vector<geometry_msgs::msg::PoseStamped> initial_plan = global_plan.poses;
@@ -482,21 +475,11 @@ private:
         }
 
         // Get velocity command
-        double vx = 0, vy = 0, omega = 0;
-        if (!planner_->getVelocityCommandMyj(vx, vy, omega, 
-                                        // cfg_->trajectory.control_look_ahead_poses)) {
-                                        2.0)) { //
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                "Failed to get velocity command!");
-            return;
+        {
+            std::lock_guard<std::mutex> lock(teb_pose_map_mutex_);
+            teb_planned_time_ = now;
+            teb_pose_map_ = planner_->createTebPoseMap();
         }
-
-        // Publish command
-        geometry_msgs::msg::Twist cmd;
-        cmd.linear.x = vx;
-        cmd.linear.y = vy;
-        cmd.angular.z = omega;
-        cmd_pub_->publish(cmd);
 
         // Publish visualizations
         if (visualization_) {
@@ -504,6 +487,54 @@ private:
             visualization_->publishViaPoints(via_points_);
         }
         planner_->visualize();
+    }
+
+    void controlLoop() {
+        auto cmd_vel_msg = std::make_unique<geometry_msgs::msg::Twist>();
+
+        const auto now = this->now();
+        
+        std::lock_guard<std::mutex> lock(teb_pose_map_mutex_);
+
+        const auto time_from_plannning = std::max(0.0, (now - teb_planned_time_).seconds());
+
+        const auto next_pose = teb_pose_map_.upper_bound(time_from_plannning);
+        if (next_pose != teb_pose_map_.end()) {
+            // get previous pose
+            const auto prev_pose = std::prev(next_pose);
+
+            // get delta in relative frame
+            const auto delta_x = next_pose->second.x() - prev_pose->second.x();
+            const auto delta_y = next_pose->second.y() - prev_pose->second.y();
+            const auto sin_theta = std::sin(prev_pose->second.theta());
+            const auto cos_theta = std::cos(prev_pose->second.theta());
+            const auto delta_x_relative =  delta_x * cos_theta + delta_y * sin_theta;
+            const auto delta_y_relative =  -delta_x * sin_theta + delta_y * cos_theta;
+            const auto delta_theta_relative = next_pose->second.theta() - prev_pose->second.theta();
+
+            // compute cmd_vel
+            const auto dt = next_pose->first - prev_pose->first;
+            const auto dt_inv = 1.0 / dt;
+            cmd_vel_msg->linear.x = delta_x_relative * dt_inv;
+            cmd_vel_msg->linear.y = delta_y_relative * dt_inv;
+            cmd_vel_msg->angular.z = delta_theta_relative * dt_inv;
+            cmd_pub_->publish(std::move(cmd_vel_msg));
+
+            if (switched_) {
+                RCLCPP_INFO(this->get_logger(), "TEB control loop: valid cmd_vel found, resuming the robot.");
+                switched_ = false;
+            }
+        }
+        else {
+            cmd_vel_msg->linear.x = 0.0;
+            cmd_vel_msg->linear.y = 0.0;
+            cmd_vel_msg->angular.z = 0.0;
+            if (!switched_) {
+                cmd_pub_->publish(std::move(cmd_vel_msg));
+                RCLCPP_WARN(this->get_logger(), "TEB control loop: no valid cmd_vel found, stopping the robot.");
+                switched_ = true;
+            }
+        }
     }
 
     PoseSE2 getPose(rclcpp::Time now)
@@ -515,7 +546,7 @@ private:
                                 "No odometry received for %.2f seconds.", deltay);
         }
         if (!cfg_->other.predict_pose) {
-            return pose_;
+            return robot_pose_;
         }
         if (robot_vel_.angular.z == 0.0) {
             return PoseSE2(
@@ -541,7 +572,8 @@ private:
     }
 
     // variables -------------------------------------------------------------
-    double control_rate_ = 10.0;
+    double control_rate_ = 100.0;
+    double planning_rate_ = 10.0;
 
     std::shared_ptr<TebConfig> cfg_;
     std::shared_ptr<TebVisualization> visualization_;
@@ -559,6 +591,9 @@ private:
     geometry_msgs::msg::Twist robot_vel_;
     bool has_global_plan_ = false;
     bool switched_ = false;
+
+    rclcpp::Time teb_planned_time_;
+    std::map<double, PoseSE2> teb_pose_map_;
     
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
     
@@ -566,12 +601,14 @@ private:
     rclcpp::Subscription<d2_costmap_converter_msgs::msg::ObstacleArrayMsg>::SharedPtr obstacle_sub_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr global_plan_sub_;
     
+    rclcpp::TimerBase::SharedPtr planning_timer_;
     rclcpp::TimerBase::SharedPtr control_timer_;
     
     std::mutex odom_mutex_;
     std::mutex goal_mutex_;
     std::mutex obstacle_mutex_;
     std::mutex via_mutex_;
+    std::mutex teb_pose_map_mutex_;
     
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr dyn_params_handler_;
     };
