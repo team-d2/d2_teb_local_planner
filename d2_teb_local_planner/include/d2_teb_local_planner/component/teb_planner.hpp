@@ -410,20 +410,7 @@ private:
         nav_msgs::msg::Path global_plan;
         {
             std::lock_guard<std::mutex> lock(odom_mutex_);
-            const double deltay = (now - last_odom_stamp_).seconds();
-            if (deltay > 0.5) {
-                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                    "No odometry received for %.2f seconds.", deltay);
-            }
-            if (cfg_->other.predict_pose) {
-                robot_pose = PoseSE2(
-                    robot_pose_.x() + robot_vel_.linear.x * std::cos(robot_pose_.theta()) * deltay,
-                    robot_pose_.y() + robot_vel_.linear.x * std::sin(robot_pose_.theta()) * deltay,
-                    robot_pose_.theta() + robot_vel_.angular.z * deltay
-                );
-            } else {
-                robot_pose = robot_pose_;
-            }
+            robot_pose = getPose(now);
             robot_vel = robot_vel_;
         }
         {
@@ -517,6 +504,40 @@ private:
             visualization_->publishViaPoints(via_points_);
         }
         planner_->visualize();
+    }
+
+    PoseSE2 getPose(rclcpp::Time now)
+    {
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        const double deltay = (now - last_odom_stamp_).seconds();
+        if (deltay > 0.5) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                "No odometry received for %.2f seconds.", deltay);
+        }
+        if (!cfg_->other.predict_pose) {
+            return pose_;
+        }
+        if (robot_vel_.angular.z == 0.0) {
+            return PoseSE2(
+                robot_pose_.x() + robot_vel_.linear.x * std::cos(robot_pose_.theta()) * deltay,
+                robot_pose_.y() + robot_vel_.linear.x * std::sin(robot_pose_.theta()) * deltay,
+                robot_pose_.theta()
+            );
+        }
+        
+        auto robot_vel_angular_z_inv = 1.0 / robot_vel_.angular.z;
+        auto delta_theta = robot_vel_.angular.z * deltay;
+        auto delta_theta_sin = std::sin(delta_theta);
+        auto delta_theta_1_minus_cos = 1.0 - std::cos(delta_theta);
+        auto delta_x = robot_vel_angular_z_inv * (robot_vel_.linear.x *  delta_theta_sin +
+                       robot_vel_.linear.y * delta_theta_1_minus_cos);
+        auto delta_y = robot_vel_angular_z_inv * (robot_vel_.linear.y * delta_theta_sin -
+                       robot_vel_.linear.x * delta_theta_1_minus_cos);
+
+        return PoseSE2(
+            robot_pose_.x() + delta_x * std::cos(robot_pose_.theta()) - delta_y * std::sin(robot_pose_.theta()),
+            robot_pose_.y() + delta_x * std::sin(robot_pose_.theta()) + delta_y * std::cos(robot_pose_.theta()),
+            robot_pose_.theta() + delta_theta);
     }
 
     // variables -------------------------------------------------------------
