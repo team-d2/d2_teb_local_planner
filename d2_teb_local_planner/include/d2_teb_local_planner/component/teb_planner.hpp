@@ -87,7 +87,8 @@ private:
         this->declare_parameter("feasibility_check_no_poses", cfg_->trajectory.feasibility_check_no_poses);
         this->declare_parameter("publish_feedback", cfg_->trajectory.publish_feedback);
         this->declare_parameter("control_look_ahead_poses", cfg_->trajectory.control_look_ahead_poses);
-        this->declare_parameter("control_rate", 10.0);
+        this->declare_parameter("control_rate", 100.0);
+        this->declare_parameter("planning_rate", 10.0);
 
         // Robot parameters
         this->declare_parameter("max_vel_x", cfg_->robot.max_vel_x);
