@@ -206,7 +206,9 @@ target_link_libraries(teb_planner_component
   d2_teb_local_planner
 )
 
-rclcpp_components_register_nodes(teb_planner_component "d2_teb_local_planner::TebMotionStandaloneComponent")
+rclcpp_components_register_node(teb_planner_component
+  PLUGIN "d2_teb_local_planner::TebMotionStandaloneComponent"
+  EXECUTABLE "teb_motion_standalone_node")
 
 install(TARGETS teb_planner_component
   ARCHIVE DESTINATION lib

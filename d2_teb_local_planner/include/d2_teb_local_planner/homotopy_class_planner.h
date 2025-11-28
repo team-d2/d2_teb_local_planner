@@ -199,7 +199,7 @@ public:
    */
   virtual bool getVelocityCommand(double& vx, double& vy, double& omega, int look_ahead_poses) const;
 
-  virtual std::map<double, PoseSE2> createTebPoseMap() const;
+  virtual std::map<rclcpp::Time, geometry_msgs::msg::Twist> getCmdVelMsgDataMap(const rclcpp::Time & now) const;
 
   /**
    * @brief Access current best trajectory candidate (that relates to the "best" homotopy class).

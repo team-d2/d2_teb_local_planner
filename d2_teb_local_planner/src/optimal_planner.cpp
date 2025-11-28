@@ -1169,20 +1169,41 @@ bool TebOptimalPlanner::getVelocityCommand(double& vx, double& vy, double& omega
   return true;
 }
 
-std::map<double, PoseSE2> TebOptimalPlanner::createTebPoseMap() const
+std::map<rclcpp::Time, geometry_msgs::msg::Twist> TebOptimalPlanner::getCmdVelMsgDataMap(const rclcpp::Time & now) const
 {
-  std::map<double, PoseSE2> teb_pose_map;
+  std::map<rclcpp::Time, geometry_msgs::msg::Twist> cmd_vel_msg_data_map;
+  if (teb_.sizePoses() == 0) {
+    return cmd_vel_msg_data_map;
+  }
 
   auto poses_last_index = teb_.sizePoses() - 1;
-  double dt = 0.0;
+  auto last_pose =  teb_.Pose(0);
+  auto dt_sum = 0.0;
   for (size_t i = 0; i < poses_last_index; ++i)
   {
-    teb_pose_map[dt] = teb_.Pose(i);
-    dt += teb_.TimeDiff(i);
+    const auto dt = teb_.TimeDiff(i);
+    const auto pose = teb_.Pose(i + 1);
+    const auto dx = pose.x() - last_pose.x();
+    const auto dy = pose.y() - last_pose.y();
+    const auto dtheta = g2o::normalize_theta(pose.theta() - last_pose.theta());
+    const auto dsin = std::sin(last_pose.theta());
+    const auto dcos = std::cos(last_pose.theta());
+    const auto dx_relative =  dcos * dx + dsin * dy;
+    const auto dy_relative = -dsin * dx + dcos * dy;
+    geometry_msgs::msg::Twist cmd_vel;
+    cmd_vel.linear.x = dx_relative / dt;
+    cmd_vel.linear.y = dy_relative / dt;
+    cmd_vel.linear.z = 0.0;
+    cmd_vel.angular.x = 0.0;
+    cmd_vel.angular.y = 0.0;
+    cmd_vel.angular.z = dtheta / dt;
+    last_pose = pose;
+    dt_sum += dt;
+    cmd_vel_msg_data_map.emplace(now + rclcpp::Duration::from_seconds(dt_sum), cmd_vel);
+    std::cout << "dt: " << dt << std::endl;
   }
-  teb_pose_map[dt] = teb_.Pose(poses_last_index);
 
-  return teb_pose_map;
+  return cmd_vel_msg_data_map;
 }
 
 void TebOptimalPlanner::getVelocityProfile(std::vector<geometry_msgs::msg::Twist>& velocity_profile) const

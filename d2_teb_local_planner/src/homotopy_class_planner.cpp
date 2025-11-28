@@ -145,15 +145,15 @@ bool HomotopyClassPlanner::getVelocityCommand(double& vx, double& vy, double& om
 }
 
 
-std::map<double, PoseSE2> HomotopyClassPlanner::createTebPoseMap() const
+std::map<rclcpp::Time, geometry_msgs::msg::Twist> HomotopyClassPlanner::getCmdVelMsgDataMap(const rclcpp::Time & now) const
 {
   TebOptimalPlannerConstPtr best_teb = bestTeb();
   if (!best_teb)
   {
-    return std::map<double, PoseSE2>();
+    return std::map<rclcpp::Time, geometry_msgs::msg::Twist>();
   }
 
-  return best_teb->createTebPoseMap();
+  return best_teb->getCmdVelMsgDataMap(now);
 }
 
 

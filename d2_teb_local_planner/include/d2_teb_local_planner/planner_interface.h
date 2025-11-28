@@ -144,7 +144,7 @@ public:
    */
   virtual bool getVelocityCommand(double& vx, double& vy, double& omega, int look_ahead_poses) const = 0;
 
-  virtual std::map<double, PoseSE2> createTebPoseMap() const;
+  virtual std::map<rclcpp::Time, geometry_msgs::msg::Twist> getCmdVelMsgDataMap(const rclcpp::Time & now) const = 0;
   
   //@}
   

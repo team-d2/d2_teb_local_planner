@@ -20,297 +20,170 @@ namespace d2_teb_local_planner
 class TebMotionStandaloneComponent : public rclcpp::Node
 {
 public:
-    explicit TebMotionStandaloneComponent(const rclcpp::NodeOptions & options)
-    : Node("teb_motion_standalone", options)
-    {
-        // Config
-        cfg_ = std::make_shared<TebConfig>();
-        cfg_->node_name = this->get_name();
-        
-        loadParameters();
-        
-        // Dynamic parameters
-        dyn_params_handler_ = this->add_on_set_parameters_callback(
-            std::bind(&TebMotionStandaloneComponent::parametersCallback, this,
-                    std::placeholders::_1));
-
-        RCLCPP_INFO(this->get_logger(), "Loaded parameters from parameter server");
-        initializeComponents();
-        RCLCPP_INFO(this->get_logger(), "Initialized TEB components");
-
-        // Publishers
-        cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel_teb", 10);
-
-        // Subscribers
-        odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+    explicit TebMotionStandaloneComponent(const std::string node_name, const std::string node_namespace, const rclcpp::NodeOptions & options)
+    : Node(node_name, node_namespace, options),
+      teb_cfg_(this->create_teb_config()),
+      odom_timeout_duration_(rclcpp::Duration::from_seconds(this->declare_parameter("odom_timeout", 1.0))),
+      lifecycle_node_(this->create_lifecycle_node(*teb_cfg_)),
+      visualization_(std::make_shared<TebVisualization>(lifecycle_node_, *teb_cfg_)),
+      params_setter_(this->add_on_set_parameters_callback(
+        std::bind(&TebMotionStandaloneComponent::parametersCallback, this,
+        std::placeholders::_1))),
+      cfg_params_setter_(this->add_on_set_parameters_callback(
+            std::bind(&TebConfig::dynamicParametersCallback, teb_cfg_.get(), std::placeholders::_1))),
+      cmd_vel_pub_(this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel_teb", 10)),
+        odom_sub_(this->create_subscription<nav_msgs::msg::Odometry>(
             "/odom", rclcpp::SensorDataQoS(),
-            std::bind(&TebMotionStandaloneComponent::odomCB, this, std::placeholders::_1));
-        
-        obstacle_sub_ = this->create_subscription<d2_costmap_converter_msgs::msg::ObstacleArrayMsg>(
+            std::bind(&TebMotionStandaloneComponent::odomCB, this, std::placeholders::_1))),
+        obstacle_sub_(this->create_subscription<d2_costmap_converter_msgs::msg::ObstacleArrayMsg>(
             "/obstacles", rclcpp::SensorDataQoS(),
-            std::bind(&TebMotionStandaloneComponent::obstacleCB, this, std::placeholders::_1));
-        
-        // ようは waypointから作った global_plan を受け取る
-        global_plan_sub_ = this->create_subscription<nav_msgs::msg::Path>(
+            std::bind(&TebMotionStandaloneComponent::obstacleCB, this, std::placeholders::_1))),
+        global_plan_sub_(this->create_subscription<nav_msgs::msg::Path>(
             "/wp_global_plan", 10,
-            std::bind(&TebMotionStandaloneComponent::globalPlanCB, this, std::placeholders::_1));
+            std::bind(&TebMotionStandaloneComponent::globalPlanCB, this, std::placeholders::_1))),
+        planning_timer_(this->create_wall_timer(
+            std::chrono::duration<double>(1.0 / this->declare_parameter("planning_rate", 10.0)),
+            std::bind(&TebMotionStandaloneComponent::planningLoop, this))),
+        control_callback_group_(this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive)),
+        control_timer_(this->create_wall_timer(
+            std::chrono::duration<double>(1.0 / this->declare_parameter("control_rate", 20.0)),
+            std::bind(&TebMotionStandaloneComponent::controlLoop, this),
+            control_callback_group_))
+    {
+        visualization_->on_configure();
+        visualization_->on_activate();
+        RCLCPP_INFO(this->get_logger(), "TEB Motion Standalone Component initialized!!!!!!!");
+    }
 
-        auto control_callback_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-        control_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(static_cast<int>(1000.0 / control_rate_)),
-            std::bind(&TebMotionStandaloneComponent::controlLoop, this), control_callback_group);
-        
-        planning_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(static_cast<int>(1000.0 / planning_rate_)),
-            std::bind(&TebMotionStandaloneComponent::planningLoop, this));
+    explicit TebMotionStandaloneComponent(const std::string node_name, const rclcpp::NodeOptions & options)
+    : TebMotionStandaloneComponent(node_name, "", options)
+    {
+    }
 
-        RCLCPP_INFO(this->get_logger(), "TEB Motion Standalone Component initialized");
+    explicit TebMotionStandaloneComponent(const rclcpp::NodeOptions & options)
+    : TebMotionStandaloneComponent("teb_motion_standalone", "", options)
+    {
     }
 
 private:
-    void loadParameters()
+    std::unique_ptr<TebConfig> create_teb_config()
     {
+        auto cfg = std::make_unique<TebConfig>();
+        cfg->node_name = this->get_name();
+        // Load parameters from the parameter server
         // Trajectory parameters
-        this->declare_parameter("teb_autosize", cfg_->trajectory.teb_autosize);
-        this->declare_parameter("dt_ref", cfg_->trajectory.dt_ref);
-        this->declare_parameter("dt_hysteresis", cfg_->trajectory.dt_hysteresis);
-        this->declare_parameter("min_samples", cfg_->trajectory.min_samples);
-        this->declare_parameter("max_samples", cfg_->trajectory.max_samples);
-        this->declare_parameter("global_plan_overwrite_orientation", cfg_->trajectory.global_plan_overwrite_orientation);
-        this->declare_parameter("allow_init_with_backwards_motion", cfg_->trajectory.allow_init_with_backwards_motion);
-        this->declare_parameter("global_plan_viapoint_sep", cfg_->trajectory.global_plan_viapoint_sep);
-        this->declare_parameter("via_points_ordered", cfg_->trajectory.via_points_ordered);
-        this->declare_parameter("max_global_plan_lookahead_dist", cfg_->trajectory.max_global_plan_lookahead_dist);
-        this->declare_parameter("exact_arc_length", cfg_->trajectory.exact_arc_length);
-        this->declare_parameter("force_reinit_new_goal_dist", cfg_->trajectory.force_reinit_new_goal_dist);
-        this->declare_parameter("force_reinit_new_goal_angular", cfg_->trajectory.force_reinit_new_goal_angular);
-        this->declare_parameter("feasibility_check_no_poses", cfg_->trajectory.feasibility_check_no_poses);
-        this->declare_parameter("publish_feedback", cfg_->trajectory.publish_feedback);
-        this->declare_parameter("control_look_ahead_poses", cfg_->trajectory.control_look_ahead_poses);
-        this->declare_parameter("control_rate", 100.0);
-        this->declare_parameter("planning_rate", 10.0);
-
+        cfg->trajectory.teb_autosize = this->declare_parameter("teb_autosize", cfg->trajectory.teb_autosize);
+        cfg->trajectory.dt_ref = this->declare_parameter("dt_ref", cfg->trajectory.dt_ref);
+        cfg->trajectory.dt_hysteresis = this->declare_parameter("dt_hysteresis", cfg->trajectory.dt_hysteresis);
+        cfg->trajectory.min_samples = this->declare_parameter("min_samples", cfg->trajectory.min_samples);
+        cfg->trajectory.max_samples = this->declare_parameter("max_samples", cfg->trajectory.max_samples);
+        cfg->trajectory.global_plan_overwrite_orientation = this->declare_parameter("global_plan_overwrite_orientation", cfg->trajectory.global_plan_overwrite_orientation);
+        cfg->trajectory.allow_init_with_backwards_motion = this->declare_parameter("allow_init_with_backwards_motion", cfg->trajectory.allow_init_with_backwards_motion);
+        cfg->trajectory.global_plan_viapoint_sep = this->declare_parameter("global_plan_viapoint_sep", cfg->trajectory.global_plan_viapoint_sep);
+        cfg->trajectory.via_points_ordered = this->declare_parameter("via_points_ordered", cfg->trajectory.via_points_ordered);
+        cfg->trajectory.max_global_plan_lookahead_dist = this->declare_parameter("max_global_plan_lookahead_dist", cfg->trajectory.max_global_plan_lookahead_dist);
+        cfg->trajectory.exact_arc_length = this->declare_parameter("exact_arc_length", cfg->trajectory.exact_arc_length);
+        cfg->trajectory.force_reinit_new_goal_dist = this->declare_parameter("force_reinit_new_goal_dist", cfg->trajectory.force_reinit_new_goal_dist);
+        cfg->trajectory.force_reinit_new_goal_angular = this->declare_parameter("force_reinit_new_goal_angular", cfg->trajectory.force_reinit_new_goal_angular);
+        cfg->trajectory.feasibility_check_no_poses = this->declare_parameter("feasibility_check_no_poses", cfg->trajectory.feasibility_check_no_poses);
+        cfg->trajectory.publish_feedback = this->declare_parameter("publish_feedback", cfg->trajectory.publish_feedback);
+        cfg->trajectory.control_look_ahead_poses = this->declare_parameter("control_look_ahead_poses", cfg->trajectory.control_look_ahead_poses);
         // Robot parameters
-        this->declare_parameter("max_vel_x", cfg_->robot.max_vel_x);
-        this->declare_parameter("max_vel_x_backwards", cfg_->robot.max_vel_x_backwards);
-        this->declare_parameter("max_vel_y", cfg_->robot.max_vel_y);
-        this->declare_parameter("max_vel_theta", cfg_->robot.max_vel_theta);
-        this->declare_parameter("acc_lim_x", cfg_->robot.acc_lim_x);
-        this->declare_parameter("acc_lim_y", cfg_->robot.acc_lim_y);
-        this->declare_parameter("acc_lim_theta", cfg_->robot.acc_lim_theta);
-        this->declare_parameter("min_turning_radius", cfg_->robot.min_turning_radius);
-        this->declare_parameter("wheelbase", cfg_->robot.wheelbase);
-        this->declare_parameter("cmd_angle_instead_rotvel", cfg_->robot.cmd_angle_instead_rotvel);
-
+        cfg->robot.max_vel_x = this->declare_parameter("max_vel_x", cfg->robot.max_vel_x);
+        cfg->robot.max_vel_x_backwards = this->declare_parameter("max_vel_x_backwards", cfg->robot.max_vel_x_backwards);
+        cfg->robot.max_vel_y = this->declare_parameter("max_vel_y", cfg->robot.max_vel_y);
+        cfg->robot.max_vel_theta = this->declare_parameter("max_vel_theta", cfg->robot.max_vel_theta);
+        cfg->robot.acc_lim_x = this->declare_parameter("acc_lim_x", cfg->robot.acc_lim_x);
+        cfg->robot.acc_lim_y = this->declare_parameter("acc_lim_y", cfg->robot.acc_lim_y);
+        cfg->robot.acc_lim_theta = this->declare_parameter("acc_lim_theta", cfg->robot.acc_lim_theta);
+        cfg->robot.min_turning_radius = this->declare_parameter("min_turning_radius", cfg->robot.min_turning_radius);
+        cfg->robot.wheelbase = this->declare_parameter("wheelbase", cfg->robot.wheelbase);
+        cfg->robot.cmd_angle_instead_rotvel = this->declare_parameter("cmd_angle_instead_rotvel", cfg->robot.cmd_angle_instead_rotvel);
         // Goal tolerance
-        this->declare_parameter("xy_goal_tolerance", cfg_->goal_tolerance.xy_goal_tolerance);
-        this->declare_parameter("yaw_goal_tolerance", cfg_->goal_tolerance.yaw_goal_tolerance);
-        this->declare_parameter("free_goal_vel", cfg_->goal_tolerance.free_goal_vel);
-
+        cfg->goal_tolerance.xy_goal_tolerance = this->declare_parameter("xy_goal_tolerance", cfg->goal_tolerance.xy_goal_tolerance);
+        cfg->goal_tolerance.yaw_goal_tolerance = this->declare_parameter("yaw_goal_tolerance", cfg->goal_tolerance.yaw_goal_tolerance);
+        cfg->goal_tolerance.free_goal_vel = this->declare_parameter("free_goal_vel", cfg->goal_tolerance.free_goal_vel);
         // Obstacles
-        this->declare_parameter("min_obstacle_dist", cfg_->obstacles.min_obstacle_dist);
-        this->declare_parameter("inflation_dist", cfg_->obstacles.inflation_dist);
-        this->declare_parameter("dynamic_obstacle_inflation_dist", cfg_->obstacles.dynamic_obstacle_inflation_dist);
-        this->declare_parameter("include_dynamic_obstacles", cfg_->obstacles.include_dynamic_obstacles);
-        this->declare_parameter("include_costmap_obstacles", cfg_->obstacles.include_costmap_obstacles);
-        this->declare_parameter("costmap_obstacles_behind_robot_dist", cfg_->obstacles.costmap_obstacles_behind_robot_dist);
-        this->declare_parameter("obstacle_poses_affected", cfg_->obstacles.obstacle_poses_affected);
-        this->declare_parameter("legacy_obstacle_association", cfg_->obstacles.legacy_obstacle_association);
-        this->declare_parameter("obstacle_association_force_inclusion_factor", cfg_->obstacles.obstacle_association_force_inclusion_factor);
-        this->declare_parameter("obstacle_association_cutoff_factor", cfg_->obstacles.obstacle_association_cutoff_factor);
-
+        cfg->obstacles.min_obstacle_dist = this->declare_parameter("min_obstacle_dist", cfg->obstacles.min_obstacle_dist);
+        cfg->obstacles.inflation_dist = this->declare_parameter("inflation_dist", cfg->obstacles.inflation_dist);
+        cfg->obstacles.dynamic_obstacle_inflation_dist = this->declare_parameter("dynamic_obstacle_inflation_dist", cfg->obstacles.dynamic_obstacle_inflation_dist);
+        cfg->obstacles.include_dynamic_obstacles = this->declare_parameter("include_dynamic_obstacles", cfg->obstacles.include_dynamic_obstacles);
+        cfg->obstacles.include_costmap_obstacles = this->declare_parameter("include_costmap_obstacles", cfg->obstacles.include_costmap_obstacles);
+        cfg->obstacles.costmap_obstacles_behind_robot_dist = this->declare_parameter("costmap_obstacles_behind_robot_dist", cfg->obstacles.costmap_obstacles_behind_robot_dist);
+        cfg->obstacles.obstacle_poses_affected = this->declare_parameter("obstacle_poses_affected", cfg->obstacles.obstacle_poses_affected);
+        cfg->obstacles.legacy_obstacle_association = this->declare_parameter("legacy_obstacle_association", cfg->obstacles.legacy_obstacle_association);
+        cfg->obstacles.obstacle_association_force_inclusion_factor = this->declare_parameter("obstacle_association_force_inclusion_factor", cfg->obstacles.obstacle_association_force_inclusion_factor);
+        cfg->obstacles.obstacle_association_cutoff_factor = this->declare_parameter("obstacle_association_cutoff_factor", cfg->obstacles.obstacle_association_cutoff_factor);
         // Optimization
-        this->declare_parameter("no_inner_iterations", cfg_->optim.no_inner_iterations);
-        this->declare_parameter("no_outer_iterations", cfg_->optim.no_outer_iterations);
-        this->declare_parameter("optimization_activate", cfg_->optim.optimization_activate);
-        this->declare_parameter("optimization_verbose", cfg_->optim.optimization_verbose);
-        this->declare_parameter("penalty_epsilon", cfg_->optim.penalty_epsilon);
-        this->declare_parameter("weight_max_vel_x", cfg_->optim.weight_max_vel_x);
-        this->declare_parameter("weight_max_vel_theta", cfg_->optim.weight_max_vel_theta);
-        this->declare_parameter("weight_acc_lim_x", cfg_->optim.weight_acc_lim_x);
-        this->declare_parameter("weight_acc_lim_theta", cfg_->optim.weight_acc_lim_theta);
-        this->declare_parameter("weight_kinematics_nh", cfg_->optim.weight_kinematics_nh);
-        this->declare_parameter("weight_kinematics_forward_drive", cfg_->optim.weight_kinematics_forward_drive);
-        this->declare_parameter("weight_kinematics_turning_radius", cfg_->optim.weight_kinematics_turning_radius);
-        this->declare_parameter("weight_optimaltime", cfg_->optim.weight_optimaltime);
-        this->declare_parameter("weight_shortest_path", cfg_->optim.weight_shortest_path);
-        this->declare_parameter("weight_obstacle", cfg_->optim.weight_obstacle);
-        this->declare_parameter("weight_inflation", cfg_->optim.weight_inflation);
-        this->declare_parameter("weight_dynamic_obstacle", cfg_->optim.weight_dynamic_obstacle);
-        this->declare_parameter("weight_dynamic_obstacle_inflation", cfg_->optim.weight_dynamic_obstacle_inflation);
-        this->declare_parameter("weight_viapoint", cfg_->optim.weight_viapoint);
-        this->declare_parameter("weight_adapt_factor", cfg_->optim.weight_adapt_factor);
-
-        // Homotopy Class Planner
-        this->declare_parameter("enable_homotopy_class_planning", cfg_->hcp.enable_homotopy_class_planning);
-        this->declare_parameter("enable_multithreading", cfg_->hcp.enable_multithreading);
-        this->declare_parameter("simple_exploration", cfg_->hcp.simple_exploration);
-        this->declare_parameter("max_number_classes", cfg_->hcp.max_number_classes);
-        this->declare_parameter("selection_cost_hysteresis", cfg_->hcp.selection_cost_hysteresis);
-        this->declare_parameter("selection_prefer_initial_plan", cfg_->hcp.selection_prefer_initial_plan);
-        this->declare_parameter("selection_obst_cost_scale", cfg_->hcp.selection_obst_cost_scale);
-        this->declare_parameter("selection_viapoint_cost_scale", cfg_->hcp.selection_viapoint_cost_scale);
-        this->declare_parameter("selection_alternative_time_cost", cfg_->hcp.selection_alternative_time_cost);
-        this->declare_parameter("roadmap_graph_no_samples", cfg_->hcp.roadmap_graph_no_samples);
-        this->declare_parameter("roadmap_graph_area_width", cfg_->hcp.roadmap_graph_area_width);
-        this->declare_parameter("h_signature_prescaler", cfg_->hcp.h_signature_prescaler);
-        this->declare_parameter("h_signature_threshold", cfg_->hcp.h_signature_threshold);
-        this->declare_parameter("obstacle_heading_threshold", cfg_->hcp.obstacle_heading_threshold);
-        this->declare_parameter("viapoints_all_candidates", cfg_->hcp.viapoints_all_candidates);
-        this->declare_parameter("visualize_hc_graph", cfg_->hcp.visualize_hc_graph);
-
-        // Footprint model
-        this->declare_parameter("footprint_model.type", std::string("point"));
-        this->declare_parameter("footprint_model.radius", 0.3);
-        this->declare_parameter("footprint_model.vertices", std::vector<double>{});
-
-        // Recovery
-        this->declare_parameter("oscillation_avoidance", cfg_->recovery.oscillation_avoidance);
-        this->declare_parameter("oscillation_omega_eps", cfg_->recovery.oscillation_omega_eps);
-        this->declare_parameter("oscillation_recovery_min_duration", cfg_->recovery.oscillation_recovery_min_duration);
-        this->declare_parameter("oscillation_filter_duration", cfg_->recovery.oscillation_filter_duration);
-        this->declare_parameter("divergence_detection_enable", cfg_->recovery.divergence_detection_enable);
-        this->declare_parameter("divergence_detection_max_chi_squared", cfg_->recovery.divergence_detection_max_chi_squared);
-        
-        // Other
-        this->declare_parameter("predict_pose", cfg_->other.predict_pose);
-
-        // Get parameters
-        cfg_->trajectory.teb_autosize = this->get_parameter("teb_autosize").as_bool();
-        cfg_->trajectory.dt_ref = this->get_parameter("dt_ref").as_double();
-        cfg_->trajectory.dt_hysteresis = this->get_parameter("dt_hysteresis").as_double();
-        cfg_->trajectory.min_samples = this->get_parameter("min_samples").as_int();
-        cfg_->trajectory.max_samples = this->get_parameter("max_samples").as_int();
-        cfg_->trajectory.global_plan_overwrite_orientation = this->get_parameter("global_plan_overwrite_orientation").as_bool();
-        cfg_->trajectory.allow_init_with_backwards_motion = this->get_parameter("allow_init_with_backwards_motion").as_bool();
-        cfg_->trajectory.global_plan_viapoint_sep = this->get_parameter("global_plan_viapoint_sep").as_double();
-        cfg_->trajectory.via_points_ordered = this->get_parameter("via_points_ordered").as_bool();
-        cfg_->trajectory.max_global_plan_lookahead_dist = this->get_parameter("max_global_plan_lookahead_dist").as_double();
-        cfg_->trajectory.exact_arc_length = this->get_parameter("exact_arc_length").as_bool();
-        cfg_->trajectory.force_reinit_new_goal_dist = this->get_parameter("force_reinit_new_goal_dist").as_double();
-        cfg_->trajectory.force_reinit_new_goal_angular = this->get_parameter("force_reinit_new_goal_angular").as_double();
-        cfg_->trajectory.feasibility_check_no_poses = this->get_parameter("feasibility_check_no_poses").as_int();
-        cfg_->trajectory.publish_feedback = this->get_parameter("publish_feedback").as_bool();
-        cfg_->trajectory.control_look_ahead_poses = this->get_parameter("control_look_ahead_poses").as_int();
-        // cfg_->trajectory.control_rate = this->get_parameter("control_rate").as_double();
-
-        control_rate_ = this->get_parameter("control_rate").as_double();
-        planning_rate_ = this->get_parameter("planning_rate").as_double();
-
-        cfg_->robot.max_vel_x = this->get_parameter("max_vel_x").as_double();
-        cfg_->robot.max_vel_x_backwards = this->get_parameter("max_vel_x_backwards").as_double();
-        cfg_->robot.max_vel_y = this->get_parameter("max_vel_y").as_double();
-        cfg_->robot.max_vel_theta = this->get_parameter("max_vel_theta").as_double();
-        cfg_->robot.acc_lim_x = this->get_parameter("acc_lim_x").as_double();
-        cfg_->robot.acc_lim_y = this->get_parameter("acc_lim_y").as_double();
-        cfg_->robot.acc_lim_theta = this->get_parameter("acc_lim_theta").as_double();
-        cfg_->robot.min_turning_radius = this->get_parameter("min_turning_radius").as_double();
-        cfg_->robot.wheelbase = this->get_parameter("wheelbase").as_double();
-        cfg_->robot.cmd_angle_instead_rotvel = this->get_parameter("cmd_angle_instead_rotvel").as_bool();
-
-        cfg_->goal_tolerance.xy_goal_tolerance = this->get_parameter("xy_goal_tolerance").as_double();
-        cfg_->goal_tolerance.yaw_goal_tolerance = this->get_parameter("yaw_goal_tolerance").as_double();
-        cfg_->goal_tolerance.free_goal_vel = this->get_parameter("free_goal_vel").as_bool();
-
-        cfg_->obstacles.min_obstacle_dist = this->get_parameter("min_obstacle_dist").as_double();
-        cfg_->obstacles.inflation_dist = this->get_parameter("inflation_dist").as_double();
-        cfg_->obstacles.dynamic_obstacle_inflation_dist = this->get_parameter("dynamic_obstacle_inflation_dist").as_double();
-        cfg_->obstacles.include_dynamic_obstacles = this->get_parameter("include_dynamic_obstacles").as_bool();
-        cfg_->obstacles.include_costmap_obstacles = this->get_parameter("include_costmap_obstacles").as_bool();
-        cfg_->obstacles.costmap_obstacles_behind_robot_dist = this->get_parameter("costmap_obstacles_behind_robot_dist").as_double();
-        cfg_->obstacles.obstacle_poses_affected = this->get_parameter("obstacle_poses_affected").as_int();
-        cfg_->obstacles.legacy_obstacle_association = this->get_parameter("legacy_obstacle_association").as_bool();
-        cfg_->obstacles.obstacle_association_force_inclusion_factor = this->get_parameter("obstacle_association_force_inclusion_factor").as_double();
-        cfg_->obstacles.obstacle_association_cutoff_factor = this->get_parameter("obstacle_association_cutoff_factor").as_double();
-
-        cfg_->optim.no_inner_iterations = this->get_parameter("no_inner_iterations").as_int();
-        cfg_->optim.no_outer_iterations = this->get_parameter("no_outer_iterations").as_int();
-        cfg_->optim.optimization_activate = this->get_parameter("optimization_activate").as_bool();
-        cfg_->optim.optimization_verbose = this->get_parameter("optimization_verbose").as_bool();
-        cfg_->optim.penalty_epsilon = this->get_parameter("penalty_epsilon").as_double();
-        cfg_->optim.weight_max_vel_x = this->get_parameter("weight_max_vel_x").as_double();
-        cfg_->optim.weight_max_vel_theta = this->get_parameter("weight_max_vel_theta").as_double();
-        cfg_->optim.weight_acc_lim_x = this->get_parameter("weight_acc_lim_x").as_double();
-        cfg_->optim.weight_acc_lim_theta = this->get_parameter("weight_acc_lim_theta").as_double();
-        cfg_->optim.weight_kinematics_nh = this->get_parameter("weight_kinematics_nh").as_double();
-        cfg_->optim.weight_kinematics_forward_drive = this->get_parameter("weight_kinematics_forward_drive").as_double();
-        cfg_->optim.weight_kinematics_turning_radius = this->get_parameter("weight_kinematics_turning_radius").as_double();
-        cfg_->optim.weight_optimaltime = this->get_parameter("weight_optimaltime").as_double();
-        cfg_->optim.weight_shortest_path = this->get_parameter("weight_shortest_path").as_double();
-        cfg_->optim.weight_obstacle = this->get_parameter("weight_obstacle").as_double();
-        cfg_->optim.weight_inflation = this->get_parameter("weight_inflation").as_double();
-        cfg_->optim.weight_dynamic_obstacle = this->get_parameter("weight_dynamic_obstacle").as_double();
-        cfg_->optim.weight_dynamic_obstacle_inflation = this->get_parameter("weight_dynamic_obstacle_inflation").as_double();
-        cfg_->optim.weight_viapoint = this->get_parameter("weight_viapoint").as_double();
-        cfg_->optim.weight_adapt_factor = this->get_parameter("weight_adapt_factor").as_double();
-
-        cfg_->hcp.enable_homotopy_class_planning = this->get_parameter("enable_homotopy_class_planning").as_bool();
-        cfg_->hcp.enable_multithreading = this->get_parameter("enable_multithreading").as_bool();
-        cfg_->hcp.simple_exploration = this->get_parameter("simple_exploration").as_bool();
-        cfg_->hcp.max_number_classes = this->get_parameter("max_number_classes").as_int();
-        cfg_->hcp.selection_cost_hysteresis = this->get_parameter("selection_cost_hysteresis").as_double();
-        cfg_->hcp.selection_prefer_initial_plan = this->get_parameter("selection_prefer_initial_plan").as_double();
-        cfg_->hcp.selection_obst_cost_scale = this->get_parameter("selection_obst_cost_scale").as_double();
-        cfg_->hcp.selection_viapoint_cost_scale = this->get_parameter("selection_viapoint_cost_scale").as_double();
-        cfg_->hcp.selection_alternative_time_cost = this->get_parameter("selection_alternative_time_cost").as_bool();
-        cfg_->hcp.roadmap_graph_no_samples = this->get_parameter("roadmap_graph_no_samples").as_int();
-        cfg_->hcp.roadmap_graph_area_width = this->get_parameter("roadmap_graph_area_width").as_double();
-        cfg_->hcp.h_signature_prescaler = this->get_parameter("h_signature_prescaler").as_double();
-        cfg_->hcp.h_signature_threshold = this->get_parameter("h_signature_threshold").as_double();
-        cfg_->hcp.obstacle_heading_threshold = this->get_parameter("obstacle_heading_threshold").as_double();
-        cfg_->hcp.viapoints_all_candidates = this->get_parameter("viapoints_all_candidates").as_bool();
-        cfg_->hcp.visualize_hc_graph = this->get_parameter("visualize_hc_graph").as_bool();
-
-        cfg_->recovery.oscillation_avoidance = this->get_parameter("oscillation_avoidance").as_bool();
-        cfg_->recovery.oscillation_omega_eps = this->get_parameter("oscillation_omega_eps").as_double();
-        cfg_->recovery.oscillation_recovery_min_duration = this->get_parameter("oscillation_recovery_min_duration").as_double();
-        cfg_->recovery.oscillation_filter_duration = this->get_parameter("oscillation_filter_duration").as_double();
-        cfg_->recovery.divergence_detection_enable = this->get_parameter("divergence_detection_enable").as_bool();
-        cfg_->recovery.divergence_detection_max_chi_squared = this->get_parameter("divergence_detection_max_chi_squared").as_double();
-        
-        cfg_->other.predict_pose = this->get_parameter("predict_pose").as_bool();
+        cfg->optim.no_inner_iterations = this->declare_parameter("no_inner_iterations", cfg->optim.no_inner_iterations);
+        cfg->optim.no_outer_iterations = this->declare_parameter("no_outer_iterations", cfg->optim.no_outer_iterations);
+        cfg->optim.optimization_activate = this->declare_parameter("optimization_activate", cfg->optim.optimization_activate);
+        cfg->optim.optimization_verbose = this->declare_parameter("optimization_verbose", cfg->optim.optimization_verbose);
+        cfg->optim.penalty_epsilon = this->declare_parameter("penalty_epsilon", cfg->optim.penalty_epsilon);
+        cfg->optim.weight_max_vel_x = this->declare_parameter("weight_max_vel_x", cfg->optim.weight_max_vel_x);
+        cfg->optim.weight_max_vel_theta = this->declare_parameter("weight_max_vel_theta", cfg->optim.weight_max_vel_theta);
+        cfg->optim.weight_acc_lim_x = this->declare_parameter("weight_acc_lim_x", cfg->optim.weight_acc_lim_x);
+        cfg->optim.weight_acc_lim_theta = this->declare_parameter("weight_acc_lim_theta", cfg->optim.weight_acc_lim_theta);
+        cfg->optim.weight_kinematics_nh = this->declare_parameter("weight_kinematics_nh", cfg->optim.weight_kinematics_nh);
+        cfg->optim.weight_kinematics_forward_drive = this->declare_parameter("weight_kinematics_forward_drive", cfg->optim.weight_kinematics_forward_drive);
+        cfg->optim.weight_kinematics_turning_radius = this->declare_parameter("weight_kinematics_turning_radius", cfg->optim.weight_kinematics_turning_radius);
+        cfg->optim.weight_optimaltime = this->declare_parameter("weight_optimaltime", cfg->optim.weight_optimaltime);
+        cfg->optim.weight_shortest_path = this->declare_parameter("weight_shortest_path", cfg->optim.weight_shortest_path);
+        cfg->optim.weight_obstacle = this->declare_parameter("weight_obstacle", cfg->optim.weight_obstacle);
+        cfg->optim.weight_inflation = this->declare_parameter("weight_inflation", cfg->optim.weight_inflation);
+        cfg->optim.weight_dynamic_obstacle = this->declare_parameter("weight_dynamic_obstacle", cfg->optim.weight_dynamic_obstacle);
+        cfg->optim.weight_dynamic_obstacle_inflation = this->declare_parameter("weight_dynamic_obstacle_inflation", cfg->optim.weight_dynamic_obstacle_inflation);
+        cfg->optim.weight_viapoint = this->declare_parameter("weight_viapoint", cfg->optim.weight_viapoint);
+        cfg->optim.weight_adapt_factor = this->declare_parameter("weight_adapt_factor", cfg->optim.weight_adapt_factor);
+        // Homotopy class planner parameters
+        cfg->hcp.enable_homotopy_class_planning = this->declare_parameter("hcp.enable_homotopy_class_planning", cfg->hcp.enable_homotopy_class_planning);
+        cfg->hcp.enable_multithreading = this->declare_parameter("hcp.enable_multithreading", cfg->hcp.enable_multithreading);
+        cfg->hcp.simple_exploration = this->declare_parameter("hcp.simple_exploration", cfg->hcp.simple_exploration);
+        cfg->hcp.max_number_classes = this->declare_parameter("hcp.max_number_classes", cfg->hcp.max_number_classes);
+        cfg->hcp.selection_cost_hysteresis = this->declare_parameter("hcp.selection_cost_hysteresis", cfg->hcp.selection_cost_hysteresis);
+        cfg->hcp.selection_prefer_initial_plan = this->declare_parameter("hcp.selection_prefer_initial_plan", cfg->hcp.selection_prefer_initial_plan);
+        cfg->hcp.selection_obst_cost_scale = this->declare_parameter("hcp.selection_obst_cost_scale", cfg->hcp.selection_obst_cost_scale);
+        cfg->hcp.selection_viapoint_cost_scale = this->declare_parameter("hcp.selection_viapoint_cost_scale", cfg->hcp.selection_viapoint_cost_scale);
+        cfg->hcp.selection_alternative_time_cost = this->declare_parameter("hcp.selection_alternative_time_cost", cfg->hcp.selection_alternative_time_cost);
+        cfg->hcp.roadmap_graph_no_samples = this->declare_parameter("hcp.roadmap_graph_no_samples", cfg->hcp.roadmap_graph_no_samples);
+        cfg->hcp.roadmap_graph_area_width = this->declare_parameter("hcp.roadmap_graph_area_width", cfg->hcp.roadmap_graph_area_width);
+        cfg->hcp.h_signature_prescaler = this->declare_parameter("hcp.h_signature_prescaler", cfg->hcp.h_signature_prescaler);
+        cfg->hcp.h_signature_threshold = this->declare_parameter("hcp.h_signature_threshold", cfg->hcp.h_signature_threshold);
+        cfg->hcp.obstacle_heading_threshold = this->declare_parameter("hcp.obstacle_heading_threshold", cfg->hcp.obstacle_heading_threshold);
+        cfg->hcp.viapoints_all_candidates = this->declare_parameter("hcp.viapoints_all_candidates", cfg->hcp.viapoints_all_candidates);
+        cfg->hcp.visualize_hc_graph = this->declare_parameter("hcp.visualize_hc_graph", cfg->hcp.visualize_hc_graph);
 
         // Footprint model
-        std::string footprint_type = this->get_parameter("footprint_model.type").as_string();
-        if (footprint_type == "circular") {
-            double radius = this->get_parameter("footprint_model.radius").as_double();
-            cfg_->robot_model = std::make_shared<CircularRobotFootprint>(radius);
-        } else if (footprint_type == "polygon") {
-            std::vector<double> vertices = this->get_parameter("footprint_model.vertices").as_double_array();
-            PointRobotFootprint* point_model = new PointRobotFootprint();
-            cfg_->robot_model = RobotFootprintModelPtr(point_model);
+        const auto footprint_model_type = this->declare_parameter("footprint_model.type", "point");
+        if (footprint_model_type == "circular") {
+            cfg->robot_model = std::make_shared<CircularRobotFootprint>(this->declare_parameter("footprint_model.radius", 0.3));
+        } else if (footprint_model_type == "polygon") {
+            // std::vector<double> vertices = this->declare_parameter("footprint_model.vertices", std::vector<double>{});
+            cfg->robot_model = std::make_shared<PointRobotFootprint>();
         } else {
-            cfg_->robot_model = std::make_shared<PointRobotFootprint>();
+            cfg->robot_model = std::make_shared<PointRobotFootprint>();
         }
 
-        cfg_->checkParameters();
+        // Recoverie
+        cfg->recovery.oscillation_v_eps = this->declare_parameter("oscillation_v_eps", cfg->recovery.oscillation_v_eps);
+        cfg->recovery.oscillation_omega_eps = this->declare_parameter("oscillation_omega_eps", cfg->recovery.oscillation_omega_eps);
+        cfg->recovery.oscillation_recovery_min_duration = this->declare_parameter("oscillation_recovery_min_duration", cfg->recovery.oscillation_recovery_min_duration);
+        cfg->recovery.oscillation_filter_duration = this->declare_parameter("oscillation_filter_duration", cfg->recovery.oscillation_filter_duration);
+        cfg->recovery.divergence_detection_enable = this->declare_parameter("divergence_detection_enable", cfg->recovery.divergence_detection_enable);
+        cfg->recovery.divergence_detection_max_chi_squared = this->declare_parameter("divergence_detection_max_chi_squared", cfg->recovery.divergence_detection_max_chi_squared);
+
+        // Other
+        cfg->other.predict_pose = this->declare_parameter("predict_pose", cfg->other.predict_pose);
+
+        return cfg;
     }
 
-    void initializeComponents()
+    std::shared_ptr<nav2_util::LifecycleNode> create_lifecycle_node(TebConfig & teb_cfg)
     {
-        lifecycle_node_ = std::make_shared<nav2_util::LifecycleNode>(this->get_name() + std::string("_lc"));
-
-        cfg_->declareParameters(lifecycle_node_, lifecycle_node_->get_name());
-        cfg_->loadRosParamFromNodeHandle(lifecycle_node_, lifecycle_node_->get_name());
-        cfg_dyn_params_handler_ = this->add_on_set_parameters_callback(
-            std::bind(&TebConfig::dynamicParametersCallback, cfg_.get(), std::placeholders::_1)
-        );
-
-        // Visualization
-        visualization_ = std::make_shared<TebVisualization>(lifecycle_node_, *cfg_);
-        visualization_->on_configure();
-        visualization_->on_activate();
-        
-        // Planner
-        if (cfg_->hcp.enable_homotopy_class_planning) {
-            planner_ = std::make_shared<HomotopyClassPlanner>(
-                lifecycle_node_, *cfg_, &obstacles_, visualization_, &via_points_
-            );
-        } else {
-            planner_ = std::make_shared<TebOptimalPlanner>(
-                lifecycle_node_, *cfg_, &obstacles_, visualization_, &via_points_
-            );
-        }
+        auto lifecycle_node = std::make_shared<nav2_util::LifecycleNode>(this->get_name() + std::string("_lc"), this->get_namespace(), this->get_node_options());
+        teb_cfg_->declareParameters(lifecycle_node, lifecycle_node->get_name());
+        teb_cfg_->loadRosParamFromNodeHandle(lifecycle_node, lifecycle_node->get_name());
+        return lifecycle_node;
     }
 
     // 動的パラメータ更新
@@ -324,25 +197,25 @@ private:
         const std::string & name = param.get_name();
         
         // Trajectory
-        if (name == "dt_ref") cfg_->trajectory.dt_ref = param.as_double();
-        else if (name == "dt_hysteresis") cfg_->trajectory.dt_hysteresis = param.as_double();
-        else if (name == "min_samples") cfg_->trajectory.min_samples = param.as_int();
-        else if (name == "max_samples") cfg_->trajectory.max_samples = param.as_int();
+        if (name == "dt_ref") teb_cfg_->trajectory.dt_ref = param.as_double();
+        else if (name == "dt_hysteresis") teb_cfg_->trajectory.dt_hysteresis = param.as_double();
+        else if (name == "min_samples") teb_cfg_->trajectory.min_samples = param.as_int();
+        else if (name == "max_samples") teb_cfg_->trajectory.max_samples = param.as_int();
         
         // Robot
-        else if (name == "max_vel_x") cfg_->robot.max_vel_x = param.as_double();
-        else if (name == "max_vel_theta") cfg_->robot.max_vel_theta = param.as_double();
-        else if (name == "acc_lim_x") cfg_->robot.acc_lim_x = param.as_double();
-        else if (name == "acc_lim_theta") cfg_->robot.acc_lim_theta = param.as_double();
+        else if (name == "max_vel_x") teb_cfg_->robot.max_vel_x = param.as_double();
+        else if (name == "max_vel_theta") teb_cfg_->robot.max_vel_theta = param.as_double();
+        else if (name == "acc_lim_x") teb_cfg_->robot.acc_lim_x = param.as_double();
+        else if (name == "acc_lim_theta") teb_cfg_->robot.acc_lim_theta = param.as_double();
         
         // Obstacles
-        else if (name == "min_obstacle_dist") cfg_->obstacles.min_obstacle_dist = param.as_double();
-        else if (name == "inflation_dist") cfg_->obstacles.inflation_dist = param.as_double();
+        else if (name == "min_obstacle_dist") teb_cfg_->obstacles.min_obstacle_dist = param.as_double();
+        else if (name == "inflation_dist") teb_cfg_->obstacles.inflation_dist = param.as_double();
         
         // Optimization
-        else if (name == "weight_obstacle") cfg_->optim.weight_obstacle = param.as_double();
-        else if (name == "weight_viapoint") cfg_->optim.weight_viapoint = param.as_double();
-        else if (name == "weight_optimaltime") cfg_->optim.weight_optimaltime = param.as_double();
+        else if (name == "weight_obstacle") teb_cfg_->optim.weight_obstacle = param.as_double();
+        else if (name == "weight_viapoint") teb_cfg_->optim.weight_viapoint = param.as_double();
+        else if (name == "weight_optimaltime") teb_cfg_->optim.weight_optimaltime = param.as_double();
         }
 
         return result;
@@ -350,20 +223,16 @@ private:
 
     void odomCB(const nav_msgs::msg::Odometry::SharedPtr msg)
     {
-        std::lock_guard<std::mutex> lock(odom_mutex_);
-        last_odom_stamp_ = rclcpp::Time(msg->header.stamp);
-        robot_pose_ = PoseSE2(msg->pose.pose);
-        robot_vel_ = msg->twist.twist;
+        odom_msg_ = std::move(msg);
     }
 
     void obstacleCB(const d2_costmap_converter_msgs::msg::ObstacleArrayMsg::SharedPtr msg)
     {
-        std::lock_guard<std::mutex> lock(obstacle_mutex_);
         obstacles_.clear();
+        obstacles_.reserve(msg->obstacles.size());
 
-        int counter = 0;
         for (const auto& obstacle_msg : msg->obstacles) {
-            if (counter >= 500) {
+            if (obstacles_.size() >= 500) {
                 RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                     "Too many obstacles received !!!");
             }
@@ -372,98 +241,102 @@ private:
                     obstacles_.push_back(std::make_shared<CircularObstacle>(
                         obstacle_msg.polygon.points[0].x,
                         obstacle_msg.polygon.points[0].y,
-                        obstacle_msg.radius
-                    ));
-                    counter++;
+                        obstacle_msg.radius));
                 } else {
                     obstacles_.push_back(std::make_shared<PointObstacle>(
                         obstacle_msg.polygon.points[0].x,
-                        obstacle_msg.polygon.points[0].y
-                    ));
-                    counter++;
+                        obstacle_msg.polygon.points[0].y));
                 }
             } else if (obstacle_msg.polygon.points.size() > 1) {
-                PolygonObstacle* poly_obst = new PolygonObstacle();
+                auto poly_obst = std::make_shared<PolygonObstacle>();
                 for (const auto& pt : obstacle_msg.polygon.points) {
                     poly_obst->pushBackVertex(pt.x, pt.y);
                 }
                 poly_obst->finalizePolygon();
-                obstacles_.push_back(ObstaclePtr(poly_obst));
-                counter++;
+                obstacles_.push_back(std::move(poly_obst));
+            }
+            else {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                    "Received obstacle with no points!");
             }
         }
     }
 
-    void globalPlanCB(const nav_msgs::msg::Path::SharedPtr msg)
+    void globalPlanCB(nav_msgs::msg::Path::ConstSharedPtr msg)
     {
-        std::lock_guard<std::mutex> lock(via_mutex_);
-        global_plan_ = *msg;
-        has_global_plan_ = true;
-        via_points_.clear();
-        if (msg->poses.size() > 2) {
-            for (size_t i = 1; i < msg->poses.size() - 1; ++i) {
-                via_points_.emplace_back(msg->poses[i].pose.position.x, msg->poses[i].pose.position.y);
-            }
-        }
-    }
-
-    void planningLoop() {
-        if (!has_global_plan_) return;
-
-        const rclcpp::Time now = this->get_clock()->now();
-
-        PoseSE2 robot_pose;
-        geometry_msgs::msg::Twist robot_vel;
-        nav_msgs::msg::Path global_plan;
-        {
-            std::lock_guard<std::mutex> lock(odom_mutex_);
-            robot_pose = getPose(now);
-            robot_vel = robot_vel_;
-        }
-        {
-            std::lock_guard<std::mutex> lock(via_mutex_);
-            global_plan = global_plan_;
-        }
-
-        // グローバルパスが0の場合はcmd_velを0にして終了
-        if (global_plan.poses.empty()) {
-            std::lock_guard<std::mutex> lock(teb_pose_map_mutex_);
-            teb_pose_map_.clear();
+        if (msg->poses.empty()) {
+            global_plan_msg_.reset();
+            via_points_.clear();
             return;
         }
 
-        std::vector<geometry_msgs::msg::PoseStamped> initial_plan = global_plan.poses;
-        if (initial_plan.empty()) return;
+        via_points_.clear();
+        if (msg->poses.size() > 2) {
+            const auto begin_next = std::next(msg->poses.begin());
+            const auto end_prev = std::prev(msg->poses.end());
+            std::for_each(begin_next, end_prev, [this](const auto& pose){
+                via_points_.emplace_back(pose.pose.position.x, pose.pose.position.y);
+            });
+            return;
+        }
+        global_plan_msg_ = std::move(msg);
+    }
+
+    void planningLoop() {
+
+        if (global_plan_msg_ == nullptr || odom_msg_ == nullptr) {
+            planner_.reset();
+            std::unique_lock<std::mutex> lock1(cmd_vel_msg_data_map_mutex_);
+            if (!cmd_vel_msg_data_map_.empty()) {
+                cmd_vel_msg_data_map_.clear();
+                cmd_vel_msg_data_map_.emplace(rclcpp::Time(static_cast<std::int64_t>(0), this->get_clock()->get_clock_type()), geometry_msgs::msg::Twist());
+            }
+            return;
+        }
+        
+        if (planner_ == nullptr) {
+            if (teb_cfg_->hcp.enable_homotopy_class_planning) {
+                planner_ = std::make_unique<HomotopyClassPlanner>(lifecycle_node_, *teb_cfg_, &obstacles_,
+                    visualization_, &via_points_);
+            }
+            else {
+                planner_ = std::make_unique<TebOptimalPlanner>(lifecycle_node_, *teb_cfg_, &obstacles_,
+                    visualization_, &via_points_);
+            }
+        }
+
+        const auto now = this->now();
 
         // 現在のロボット位置を開始地点として設定
         geometry_msgs::msg::PoseStamped start_pose;
-        start_pose.header = global_plan.header;
-        start_pose.pose.position.x = robot_pose.x();
-        start_pose.pose.position.y = robot_pose.y();
-        start_pose.pose.position.z = 0.0;
-        start_pose.pose.orientation = tf2::toMsg(tf2::Quaternion(tf2::Vector3(0, 0, 1), robot_pose.theta()));
+        start_pose.header.stamp = now;
+        start_pose.pose = getPoseMsgData(now);
         
         // グローバルプランから現在位置より前の部分を削除
-        size_t start_index = 0;
-        double min_dist = std::numeric_limits<double>::max();
-        for (size_t i = 0; i < initial_plan.size(); ++i) {
-            PoseSE2 pose(initial_plan[i].pose);
-            double dist = (pose.position() - robot_pose.position()).norm();
-            if (dist < min_dist) {
-                min_dist = dist;
-                start_index = i;
+        const auto calc_sqr_dist = [&start_pose](const geometry_msgs::msg::PoseStamped& pose) {
+            const auto dx = pose.pose.position.x - start_pose.pose.position.x;
+            const auto dy = pose.pose.position.y - start_pose.pose.position.y;
+            const auto dz = pose.pose.position.z - start_pose.pose.position.z;
+            return dx * dx + dy * dy + dz * dz;
+        };
+
+        auto nearest_itr = global_plan_msg_->poses.begin();
+        auto nearest_sqr_dist = calc_sqr_dist(*nearest_itr);
+        for (auto itr = global_plan_msg_->poses.begin(); itr != global_plan_msg_->poses.end(); ++itr) {
+            const auto sqr_dist = calc_sqr_dist(*itr);
+            if (sqr_dist < nearest_sqr_dist) {
+                nearest_itr = itr;
+                nearest_sqr_dist = sqr_dist;
             }
         }
         
         // 現在位置を開始地点として挿入
         std::vector<geometry_msgs::msg::PoseStamped> pruned_plan;
         pruned_plan.push_back(start_pose);
-        pruned_plan.insert(pruned_plan.end(), 
-                        initial_plan.begin() + start_index, 
-                        initial_plan.end());
+        pruned_plan.insert(pruned_plan.end(), nearest_itr, global_plan_msg_->poses.end());
 
         const std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
-        bool success = planner_->plan(pruned_plan, &robot_vel, cfg_->goal_tolerance.free_goal_vel);
+        bool success = planner_->plan(pruned_plan, &odom_msg_->twist.twist, teb_cfg_->goal_tolerance.free_goal_vel);
         const std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
         const double planning_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
         RCLCPP_INFO(this->get_logger(), "Planning time: %.2f ms", planning_time);
@@ -471,15 +344,13 @@ private:
         if (!success) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                 "Planning failed!");
-            planner_->clearPlanner();
+            planner_.reset();
             return;
         }
-
         // Get velocity command
         {
-            std::lock_guard<std::mutex> lock(teb_pose_map_mutex_);
-            teb_planned_time_ = now;
-            teb_pose_map_ = planner_->createTebPoseMap();
+            std::lock_guard<std::mutex> lock(cmd_vel_msg_data_map_mutex_);
+            cmd_vel_msg_data_map_ = planner_->getCmdVelMsgDataMap(now);
         }
 
         // Publish visualizations
@@ -491,127 +362,101 @@ private:
     }
 
     void controlLoop() {
-        auto cmd_vel_msg = std::make_unique<geometry_msgs::msg::Twist>();
-
         const auto now = this->now();
         
-        std::lock_guard<std::mutex> lock(teb_pose_map_mutex_);
-
-        const auto time_from_plannning = std::max(0.0, (now - teb_planned_time_).seconds());
-
-        const auto next_pose = teb_pose_map_.upper_bound(time_from_plannning);
-        if (next_pose != teb_pose_map_.end()) {
-            // get previous pose
-            const auto prev_pose = std::prev(next_pose);
-
-            // get delta in relative frame
-            const auto delta_x = next_pose->second.x() - prev_pose->second.x();
-            const auto delta_y = next_pose->second.y() - prev_pose->second.y();
-            const auto sin_theta = std::sin(prev_pose->second.theta());
-            const auto cos_theta = std::cos(prev_pose->second.theta());
-            const auto delta_x_relative =  delta_x * cos_theta + delta_y * sin_theta;
-            const auto delta_y_relative =  -delta_x * sin_theta + delta_y * cos_theta;
-            const auto delta_theta_relative = next_pose->second.theta() - prev_pose->second.theta();
-
-            // compute cmd_vel
-            const auto dt = next_pose->first - prev_pose->first;
-            const auto dt_inv = 1.0 / dt;
-            cmd_vel_msg->linear.x = delta_x_relative * dt_inv;
-            cmd_vel_msg->linear.y = delta_y_relative * dt_inv;
-            cmd_vel_msg->angular.z = delta_theta_relative * dt_inv;
-            cmd_pub_->publish(std::move(cmd_vel_msg));
-
-            if (switched_) {
-                RCLCPP_INFO(this->get_logger(), "TEB control loop: valid cmd_vel found, resuming the robot.");
-                switched_ = false;
-            }
+        std::lock_guard<std::mutex> lock(cmd_vel_msg_data_map_mutex_);
+        if (cmd_vel_msg_data_map_.empty()) {
+            return;
         }
-        else {
-            cmd_vel_msg->linear.x = 0.0;
-            cmd_vel_msg->linear.y = 0.0;
-            cmd_vel_msg->angular.z = 0.0;
-            if (!switched_) {
-                cmd_pub_->publish(std::move(cmd_vel_msg));
-                RCLCPP_WARN(this->get_logger(), "TEB control loop: no valid cmd_vel found, stopping the robot.");
-                switched_ = true;
-            }
+
+        const auto cmd_vel_msg_itr = cmd_vel_msg_data_map_.upper_bound(now);
+        if (cmd_vel_msg_itr == cmd_vel_msg_data_map_.end()) {
+            geometry_msgs::msg::Twist cmd_vel_msg;
+            cmd_vel_msg.linear.x = 0.0;
+            cmd_vel_msg.linear.y = 0.0;
+            cmd_vel_msg.angular.z = 0.0;
+            cmd_vel_pub_->publish(cmd_vel_msg);
+            cmd_vel_msg_data_map_.clear();
+            return;
         }
+
+        cmd_vel_pub_->publish(cmd_vel_msg_itr->second);
     }
 
-    PoseSE2 getPose(rclcpp::Time now)
+    geometry_msgs::msg::Pose getPoseMsgData(rclcpp::Time now)
     {
-        std::lock_guard<std::mutex> lock(odom_mutex_);
-        const double deltay = (now - last_odom_stamp_).seconds();
-        if (deltay > 0.5) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                "No odometry received for %.2f seconds.", deltay);
+        if (teb_cfg_->other.predict_pose) {
+            return odom_msg_->pose.pose;
         }
-        if (!cfg_->other.predict_pose) {
-            return robot_pose_;
-        }
-        if (robot_vel_.angular.z == 0.0) {
-            return PoseSE2(
-                robot_pose_.x() + robot_vel_.linear.x * std::cos(robot_pose_.theta()) * deltay,
-                robot_pose_.y() + robot_vel_.linear.x * std::sin(robot_pose_.theta()) * deltay,
-                robot_pose_.theta()
-            );
-        }
-        
-        auto robot_vel_angular_z_inv = 1.0 / robot_vel_.angular.z;
-        auto delta_theta = robot_vel_.angular.z * deltay;
-        auto delta_theta_sin = std::sin(delta_theta);
-        auto delta_theta_1_minus_cos = 1.0 - std::cos(delta_theta);
-        auto delta_x = robot_vel_angular_z_inv * (robot_vel_.linear.x *  delta_theta_sin +
-                       robot_vel_.linear.y * delta_theta_1_minus_cos);
-        auto delta_y = robot_vel_angular_z_inv * (robot_vel_.linear.y * delta_theta_sin -
-                       robot_vel_.linear.x * delta_theta_1_minus_cos);
 
-        return PoseSE2(
-            robot_pose_.x() + delta_x * std::cos(robot_pose_.theta()) - delta_y * std::sin(robot_pose_.theta()),
-            robot_pose_.y() + delta_x * std::sin(robot_pose_.theta()) + delta_y * std::cos(robot_pose_.theta()),
-            robot_pose_.theta() + delta_theta);
+        const double delay = (now - rclcpp::Time(odom_msg_->header.stamp)).seconds();
+        if (delay > 0.5) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                "No odometry received for %.2f seconds.", delay);
+        }
+
+        const auto vel_angular = Eigen::Vector3d(
+            odom_msg_->twist.twist.angular.x,
+            odom_msg_->twist.twist.angular.y,
+            odom_msg_->twist.twist.angular.z);
+        const auto vel_angular_norm = vel_angular.norm();
+        const auto q_base = Eigen::Quaterniond(
+            odom_msg_->pose.pose.orientation.w,
+            odom_msg_->pose.pose.orientation.x,
+            odom_msg_->pose.pose.orientation.y,
+            odom_msg_->pose.pose.orientation.z);
+        const Eigen::Vector3d position_delta = q_base.inverse() * Eigen::Vector3d(
+            odom_msg_->twist.twist.linear.x,
+            odom_msg_->twist.twist.linear.y,
+            odom_msg_->twist.twist.linear.z) * delay;
+        geometry_msgs::msg::Pose pose_msg_data;
+        pose_msg_data.position.x = odom_msg_->pose.pose.position.x + position_delta.x();
+        pose_msg_data.position.y = odom_msg_->pose.pose.position.y + position_delta.y();
+        pose_msg_data.position.z = odom_msg_->pose.pose.position.z + position_delta.z();
+        if (vel_angular_norm == 0.0) {
+            pose_msg_data.orientation = odom_msg_->pose.pose.orientation;
+        }
+        else {
+            const auto q_angle_axis = Eigen::AngleAxisd(
+                vel_angular_norm * delay,
+                vel_angular / vel_angular_norm);
+            const auto q = q_base * q_angle_axis;
+            pose_msg_data.orientation.w = q.w();
+            pose_msg_data.orientation.x = q.x();
+            pose_msg_data.orientation.y = q.y();
+            pose_msg_data.orientation.z = q.z();
+        }
+        return pose_msg_data;
     }
 
     // variables -------------------------------------------------------------
-    double control_rate_ = 100.0;
-    double planning_rate_ = 10.0;
+    using ViaPoints = std::vector<Eigen::Vector2d, Eigen::aligned_allocator<Eigen::Vector2d>>;
 
-    std::shared_ptr<TebConfig> cfg_;
+    std::unique_ptr<TebConfig> teb_cfg_;
+    rclcpp::Duration odom_timeout_duration_;
+
+    std::shared_ptr<nav2_util::LifecycleNode> lifecycle_node_;
     std::shared_ptr<TebVisualization> visualization_;
-    PlannerInterfacePtr planner_;
-    nav2_util::LifecycleNode::SharedPtr lifecycle_node_;
-    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr cfg_dyn_params_handler_;
-    
-    ObstContainer obstacles_;
-    std::vector<Eigen::Vector2d, Eigen::aligned_allocator<Eigen::Vector2d>> via_points_;
-    nav_msgs::msg::Path global_plan_;
-    
-    rclcpp::Time last_odom_stamp_;
-    PoseSE2 robot_pose_;
-    PoseSE2 goal_pose_;
-    geometry_msgs::msg::Twist robot_vel_;
-    bool has_global_plan_ = false;
-    bool switched_ = false;
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr params_setter_;
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr cfg_params_setter_;
 
-    rclcpp::Time teb_planned_time_;
-    std::map<double, PoseSE2> teb_pose_map_;
-    
-    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
-    
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<d2_costmap_converter_msgs::msg::ObstacleArrayMsg>::SharedPtr obstacle_sub_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr global_plan_sub_;
     
     rclcpp::TimerBase::SharedPtr planning_timer_;
+
+    rclcpp::CallbackGroup::SharedPtr control_callback_group_;
     rclcpp::TimerBase::SharedPtr control_timer_;
-    
-    std::mutex odom_mutex_;
-    std::mutex goal_mutex_;
-    std::mutex obstacle_mutex_;
-    std::mutex via_mutex_;
-    std::mutex teb_pose_map_mutex_;
-    
-    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr dyn_params_handler_;
-    };
+
+    ObstContainer obstacles_;
+    ViaPoints via_points_;
+    nav_msgs::msg::Path::ConstSharedPtr global_plan_msg_;
+    nav_msgs::msg::Odometry::ConstSharedPtr odom_msg_;
+    std::unique_ptr<PlannerInterface> planner_;
+    std::mutex cmd_vel_msg_data_map_mutex_;
+    std::map<rclcpp::Time, geometry_msgs::msg::Twist> cmd_vel_msg_data_map_;
+};
 
 } // namespace d2_teb_local_planner

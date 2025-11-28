@@ -15,24 +15,24 @@
   <arg name="points_topic" default="/velodyne_points" />
 
   <arg name="global_plan_topic" default="/waypoint_path_teb" />
-  <arg name="odom_topic" default="/odom" />
+  <arg name="odom_topic" default="/predicted_odom" />
   <arg name="obstacles_topic" default="/obstacles" />
 
   <!-- Map Server -->
-  <node pkg="nav2_map_server" exec="map_server" name="map_server" output="screen">
+  <!-- <node pkg="nav2_map_server" exec="map_server" name="map_server" output="screen">
     <param name="yaml_filename" value="$(var map_yaml)" />
     <param name="topic_name" value="costmap" />
     <param name="frame_id" value="map" />
     <param name="use_sim_time" value="$(var use_sim_time)" />
-  </node>
-  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager" name="lifecycle_manager_map" output="screen">
+  </node> -->
+  <!-- <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager" name="lifecycle_manager_map" output="screen">
     <param name="use_sim_time" value="$(var use_sim_time)" />
     <param name="autostart" value="true" />
     <param name="node_names" value="['map_server']" />
-  </node>
+  </node> -->
 
   <!-- Obstacle Fusion & TEB Local Planner -->
-  <group>
+  <!-- <group>
     <node_container
       pkg="rclcpp_components"
       exec="component_container_mt"
@@ -43,9 +43,9 @@
     </node_container>
 
     <load_composable_node
-      target="$(var namespace)/$(var container_name)">
+      target="$(var namespace)/$(var container_name)"> -->
 
-      <composable_node
+      <!-- <composable_node
         pkg="$(var project_name)"
         plugin="$(var project_namespace)::ObstacleFusionComponent"
         name="obstacle_fusion">
@@ -53,20 +53,32 @@
         <param from="$(var obstacle_fusion_params)" allow_substs="true" />
         <remap from="/points" to="$(var points_topic)" />
         <extra_arg name="use_intra_process_comms" value="false"/>
-      </composable_node>
+      </composable_node> -->
 
-      <composable_node
+      <!-- <composable_node
         pkg="$(var project_name)"
         plugin="$(var project_namespace)::TebMotionStandaloneComponent"
         name="teb_local_planner">
         <param name="use_sim_time" value="$(var use_sim_time)" />
         <param from="$(var teb_params)" allow_substs="true" />
         <remap from="/wp_global_plan" to="$(var global_plan_topic)" />
-        <!-- <remap from="/odom" to="$(var odom_topic)" /> -->
+        <remap from="/odom" to="$(var odom_topic)" />
         <remap from="/obstacles" to="$(var obstacles_topic)" />
+        <remap from="/cmd_vel_teb" to="/d2_controller/target_vel" />
         <extra_arg name="use_intra_process_comms" value="false"/>
       </composable_node>
     </load_composable_node>
-  </group>
+  </group> -->
+  <node
+    pkg="$(var project_name)"
+    exec="teb_motion_standalone_node">
+    <param name="use_sim_time" value="$(var use_sim_time)" />
+    <param from="$(var teb_params)" allow_substs="true" />
+    <remap from="/wp_global_plan" to="$(var global_plan_topic)" />
+    <remap from="/odom" to="$(var odom_topic)" />
+    <remap from="/obstacles" to="$(var obstacles_topic)" />
+    <remap from="/cmd_vel_teb" to="/d2_controller/target_vel" />
+    <!-- <extra_arg name="use_intra_process_comms" value="false"/> -->
+  </node>
 
 </launch>
